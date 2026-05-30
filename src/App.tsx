@@ -26,6 +26,14 @@ import {
 } from "@/lib/platform";
 import { useSettingsQuery } from "@/lib/query";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { parseVideo, type VideoFormat } from "@/lib/api/videoParser";
+import {
+  startVideoDownload,
+  cancelVideoDownload,
+  listenDownloadProgress,
+} from "@/lib/api/download";
+import { invoke } from "@tauri-apps/api/core";
+import { Download, Loader2 } from "lucide-react";
 
 const DEFAULT_DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
 const HEADER_HEIGHT = 64; // px
@@ -65,9 +73,19 @@ function App() {
   const [downloadUrl, setDownloadUrl] = useState("");
   const [history, setHistory] = useState<DownloadRecord[]>(loadHistory);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
-  const [videoUrl, setVideoUrl] = useState("");
+  const [videoFormats, setVideoFormats] = useState<VideoFormat[]>([]);
+  const [selectedFormatIdx, setSelectedFormatIdx] = useState(0);
   const [videoTitle, setVideoTitle] = useState("");
+
+  const [videoCover, setVideoCover] = useState("");
+  const [videoPlatform, setVideoPlatform] = useState("");
   const [parseStatus, setParseStatus] = useState<"idle" | "parsing" | "success" | "error">("idle");
+
+  // 下载状态
+  const [downloadTaskId, setDownloadTaskId] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadSpeed, setDownloadSpeed] = useState(0);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const { data: settingsData } = useSettingsQuery();
   const useAppWindowControls =
@@ -155,33 +173,104 @@ function App() {
     }
   };
 
-  const handleDownload = useCallback(() => {
-    const url = downloadUrl.trim();
-    if (!url) {
+  const handleDownload = useCallback(async () => {
+    const rawInput = downloadUrl.trim();
+    if (!rawInput) {
       toast.error(t("download.emptyUrl", { defaultValue: "请输入视频链接" }));
       return;
     }
 
-    // 判断是否为视频直链
-    const videoExtRegex = /\.(mp4|webm|ogg|mov|m3u8)(\?.*)?$/i;
-    const isVideoUrl = videoExtRegex.test(url) || url.includes(".m3u8");
+    // 重置状态
+    setParseStatus("parsing");
+    setVideoFormats([]);
+    setSelectedFormatIdx(0);
+    setVideoTitle("");
 
-    if (isVideoUrl) {
-      setParseStatus("parsing");
-      setVideoUrl("");
-      setVideoTitle("");
-      // 模拟短暂解析后播放
-      setTimeout(() => {
-        setVideoUrl(url);
-        setVideoTitle(url.split("/").pop() || url);
-        setParseStatus("success");
-      }, 600);
+    setVideoCover("");
+    setVideoPlatform("");
+
+    try {
+      const info = await parseVideo(rawInput);
+      setVideoFormats(info.formats);
+      setVideoTitle(info.title);
+      setVideoCover(info.cover_url || "");
+      setVideoPlatform(info.platform);
+      setParseStatus("success");
+    } catch (error) {
+      console.error("[VideoParser] Failed to parse:", error);
+      toast.error(extractErrorMessage(error) || "视频解析失败");
+      setParseStatus("error");
+    }
+  }, [downloadUrl, t]);
+
+  // 监听下载进度
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setup = async () => {
+      unlisten = await listenDownloadProgress((progress) => {
+        setDownloadProgress(progress.total && progress.total > 0
+          ? Math.round((progress.downloaded / progress.total) * 100)
+          : 0);
+        setDownloadSpeed(progress.speed);
+
+        if (progress.status === "completed") {
+          toast.success("下载完成");
+          setDownloadTaskId(null);
+        } else if (progress.status === "failed") {
+          setDownloadError("下载失败");
+          toast.error("下载失败");
+          setDownloadTaskId(null);
+        } else if (progress.status === "cancelled") {
+          toast.info("下载已取消");
+          setDownloadTaskId(null);
+        }
+      });
+    };
+
+    void setup();
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  const handleStartDownload = useCallback(async () => {
+    if (videoFormats.length === 0 || !videoTitle) {
+      toast.error("视频信息不完整，无法下载");
       return;
     }
 
-    // 非视频直链：暂时提示
-    toast.error("暂不支持该链接格式，请尝试直接粘贴视频文件链接");
-  }, [downloadUrl]);
+    toast.info("正在打开目录选择器...");
+
+    try {
+      const dir = await invoke<string | null>("pick_directory", {});
+      if (!dir) {
+        toast.info("未选择保存目录");
+        return;
+      }
+
+      setDownloadError(null);
+      setDownloadProgress(0);
+      setDownloadSpeed(0);
+
+      const format = videoFormats[selectedFormatIdx];
+      toast.info(`开始下载: ${videoTitle}`);
+      const taskId = await startVideoDownload(videoTitle, format, dir);
+      setDownloadTaskId(taskId);
+    } catch (error) {
+      console.error("[Download] Failed to start:", error);
+      toast.error(extractErrorMessage(error) || "启动下载失败");
+    }
+  }, [videoFormats, videoTitle, selectedFormatIdx]);
+
+  const handleCancelDownload = useCallback(async () => {
+    if (!downloadTaskId) return;
+    try {
+      await cancelVideoDownload(downloadTaskId);
+    } catch (error) {
+      console.error("[Download] Failed to cancel:", error);
+    }
+  }, [downloadTaskId]);
 
   const handleClearHistory = useCallback(() => {
     setHistory([]);
@@ -200,7 +289,7 @@ function App() {
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
-      handleDownload();
+      void handleDownload();
     }
   };
 
@@ -438,19 +527,96 @@ function App() {
               )}
 
               {/* 视频预览 */}
-              {parseStatus === "success" && videoUrl && (
-                <div className="animate-fade-in">
-                  <video
-                    src={videoUrl}
-                    controls
-                    className="w-full rounded-xl bg-muted"
-                    style={{ maxHeight: "65vh" }}
-                  />
-                  {videoTitle && (
-                    <p className="mt-2 text-sm text-muted-foreground truncate">
-                      {videoTitle}
-                    </p>
-                  )}
+              {parseStatus === "success" && videoFormats.length > 0 && (
+                <div className="animate-fade-in space-y-3">
+                  {/* 视频容器：悬浮时显示下载按钮 */}
+                  <div className="relative group">
+                    <video
+                      key={selectedFormatIdx}
+                      src={videoFormats[selectedFormatIdx]?.url}
+                      controls
+                      poster={videoCover || undefined}
+                      className="w-full rounded-xl bg-muted"
+                      style={{ maxHeight: "65vh" }}
+                    />
+                    {/* 悬浮下载按钮 / 进度 */}
+                    <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-end gap-2">
+                      {downloadTaskId ? (
+                        <div className="flex items-center gap-2 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleCancelDownload}
+                            className="h-7 text-white hover:text-white hover:bg-white/20 gap-1.5 text-xs px-2"
+                          >
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            取消
+                          </Button>
+                          {downloadProgress > 0 && (
+                            <div className="w-24">
+                              <div className="h-1 bg-white/30 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-white rounded-full transition-all duration-200"
+                                  style={{ width: `${downloadProgress}%` }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-[10px] text-white/80 mt-0.5">
+                                <span>{downloadProgress}%</span>
+                                {downloadSpeed > 0 && (
+                                  <span>{(downloadSpeed / 1024 / 1024).toFixed(1)} MB/s</span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={handleStartDownload}
+                          className="bg-black/70 backdrop-blur-sm hover:bg-black/80 text-white border-0 gap-1.5 shadow-lg"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          下载视频
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {videoTitle && (
+                      <p className="text-sm font-medium text-foreground truncate">
+                        {videoTitle}
+                      </p>
+                    )}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {/* 清晰度选择 */}
+                      {videoFormats.length > 1 && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">清晰度:</span>
+                          <select
+                            value={selectedFormatIdx}
+                            onChange={(e) => setSelectedFormatIdx(Number(e.target.value))}
+                            className="text-xs bg-background border border-border rounded-md px-2 py-1 outline-none focus:border-primary"
+                          >
+                            {videoFormats.map((fmt, idx) => (
+                              <option key={idx} value={idx}>
+                                {fmt.quality}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {videoPlatform && (
+                        <span className="text-xs text-muted-foreground">
+                          来源: {videoPlatform === "douyin" ? "抖音" : videoPlatform === "bilibili" ? "B站" : "直链"}
+                        </span>
+                      )}
+                    </div>
+
+                    {downloadError && (
+                      <p className="text-xs text-destructive">{downloadError}</p>
+                    )}
+                  </div>
                 </div>
               )}
 

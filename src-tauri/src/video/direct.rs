@@ -1,0 +1,36 @@
+use super::{VideoFormat, VideoInfo, VideoParser};
+
+pub struct DirectParser;
+
+#[async_trait::async_trait]
+impl VideoParser for DirectParser {
+    fn can_handle(&self, url: &str) -> bool {
+        let video_ext_regex = regex::Regex::new(r"\.(mp4|webm|ogg|mov|m3u8)(\?.*)?$").unwrap();
+        video_ext_regex.is_match(url) || url.contains(".m3u8")
+    }
+
+    async fn parse(&self, url: &str, _client: &reqwest::Client) -> Result<VideoInfo, String> {
+        // 直链视频无需解析，直接返回
+        let title = url
+            .split('/')
+            .last()
+            .unwrap_or("视频")
+            .split('?')
+            .next()
+            .unwrap_or("视频")
+            .to_string();
+
+        Ok(VideoInfo {
+            title,
+            cover_url: None,
+            duration: None,
+            platform: "direct".to_string(),
+            formats: vec![VideoFormat {
+                quality: "original".to_string(),
+                url: url.to_string(),
+                audio_url: None,
+                size: None,
+            }],
+        })
+    }
+}

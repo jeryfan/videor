@@ -15,6 +15,7 @@ mod settings;
 mod store;
 
 mod tray;
+mod video;
 
 pub use commands::*;
 pub use error::AppError;
@@ -363,7 +364,8 @@ pub fn run() {
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
 
-            
+            // 初始化视频下载管理器
+            app.manage(crate::video::downloader::DownloadManager::new());
 
             // 初始化全局出站代理 HTTP 客户端
             {
@@ -496,6 +498,11 @@ pub fn run() {
             commands::test_proxy_url,
             commands::get_upstream_proxy_status,
             commands::scan_local_proxies,
+            // Video parser
+            commands::parse_video,
+            // Video downloader
+            commands::start_video_download,
+            commands::cancel_video_download,
         ]);
 
     let app = builder
