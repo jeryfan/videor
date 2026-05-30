@@ -65,6 +65,9 @@ function App() {
   const [downloadUrl, setDownloadUrl] = useState("");
   const [history, setHistory] = useState<DownloadRecord[]>(loadHistory);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+  const [videoUrl, setVideoUrl] = useState("");
+  const [videoTitle, setVideoTitle] = useState("");
+  const [parseStatus, setParseStatus] = useState<"idle" | "parsing" | "success" | "error">("idle");
 
   const { data: settingsData } = useSettingsQuery();
   const useAppWindowControls =
@@ -158,20 +161,27 @@ function App() {
       toast.error(t("download.emptyUrl", { defaultValue: "请输入视频链接" }));
       return;
     }
-    // TODO: integrate with actual download backend
-    const record: DownloadRecord = {
-      id: crypto.randomUUID(),
-      url,
-      title: url,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    };
-    const next = [record, ...history];
-    setHistory(next);
-    saveHistory(next);
-    setDownloadUrl("");
-    toast.success(t("download.added", { defaultValue: "已添加到下载队列" }));
-  }, [downloadUrl, history, t]);
+
+    // 判断是否为视频直链
+    const videoExtRegex = /\.(mp4|webm|ogg|mov|m3u8)(\?.*)?$/i;
+    const isVideoUrl = videoExtRegex.test(url) || url.includes(".m3u8");
+
+    if (isVideoUrl) {
+      setParseStatus("parsing");
+      setVideoUrl("");
+      setVideoTitle("");
+      // 模拟短暂解析后播放
+      setTimeout(() => {
+        setVideoUrl(url);
+        setVideoTitle(url.split("/").pop() || url);
+        setParseStatus("success");
+      }, 600);
+      return;
+    }
+
+    // 非视频直链：暂时提示
+    toast.error("暂不支持该链接格式，请尝试直接粘贴视频文件链接");
+  }, [downloadUrl]);
 
   const handleClearHistory = useCallback(() => {
     setHistory([]);
@@ -403,8 +413,9 @@ function App() {
             )}
           </div>
         ) : (
-          <div className="flex flex-col items-center pt-16 flex-1 px-6">
-            <div className="w-full max-w-2xl">
+          <div className="flex flex-col items-center flex-1 px-6">
+            <div className="w-full max-w-4xl space-y-4">
+              {/* 输入框 */}
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/50" />
                 <Input
@@ -412,11 +423,42 @@ function App() {
                   onChange={(e) => setDownloadUrl(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={t("download.urlPlaceholder", {
-                    defaultValue: "粘贴视频链接，按 Enter 开始下载...",
+                    defaultValue: "粘贴视频链接，按 Enter 开始解析...",
                   })}
                   className="w-full h-14 pl-11 pr-5 text-base rounded-2xl border border-border bg-background/60 shadow-none focus:ring-0 focus:border-border focus:shadow-none"
                 />
               </div>
+
+              {/* 解析 Loading */}
+              {parseStatus === "parsing" && (
+                <div className="flex items-center justify-center gap-2 py-2 animate-fade-in">
+                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  <span className="text-sm text-muted-foreground">正在解析视频...</span>
+                </div>
+              )}
+
+              {/* 视频预览 */}
+              {parseStatus === "success" && videoUrl && (
+                <div className="animate-fade-in">
+                  <video
+                    src={videoUrl}
+                    controls
+                    className="w-full rounded-xl bg-muted"
+                    style={{ maxHeight: "65vh" }}
+                  />
+                  {videoTitle && (
+                    <p className="mt-2 text-sm text-muted-foreground truncate">
+                      {videoTitle}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {parseStatus === "error" && (
+                <div className="text-center text-sm text-destructive py-2">
+                  解析失败，请检查链接是否正确
+                </div>
+              )}
             </div>
           </div>
         )}
