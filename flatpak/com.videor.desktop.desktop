@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Videor
+Comment=Videor - Desktop utility application
+Exec=videor
+Icon=com.videor.desktop
+Terminal=false
+Categories=Utility;
+StartupNotify=true

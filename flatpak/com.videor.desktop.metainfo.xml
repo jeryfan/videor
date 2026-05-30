@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.videor.desktop</id>
+  <name>Videor</name>
+  <summary>Videor - Desktop utility application</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>Videor is a cross-platform desktop utility application.</p>
+  </description>
+
+  <launchable type="desktop-id">com.videor.desktop.desktop</launchable>
+  <provides>
+    <binary>videor</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/farion1231/videor</url>
+  <url type="bugtracker">https://github.com/farion1231/videor/issues</url>
+</component>

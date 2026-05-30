@@ -1,0 +1,102 @@
+{
+  "app": {
+    "title": "Videor",
+    "description": "Videor - Desktop utility application"
+  },
+  "common": {
+    "save": "Save",
+    "settings": "Settings",
+    "about": "About",
+    "version": "Version",
+    "unknown": "Unknown",
+    "clear": "Clear"
+  },
+  "header": {
+    "windowMinimize": "Minimize window",
+    "windowMaximize": "Maximize window",
+    "windowRestore": "Restore window",
+    "windowClose": "Close window"
+  },
+  "settings": {
+    "title": "Settings",
+    "tabGeneral": "General",
+    "advanced": {
+      "globalProxy": {
+        "title": "Global Outbound Proxy",
+        "description": "Configure global outbound proxy for network requests"
+      }
+    },
+    "language": "Language",
+    "languageHint": "Preview interface language immediately after switching, takes effect permanently after saving.",
+    "theme": "Theme",
+    "themeHint": "Choose the appearance theme for the app, takes effect immediately.",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System",
+    "languageOptionChinese": "简体中文",
+    "languageOptionEnglish": "English",
+    "windowBehavior": "Window Behavior",
+    "launchOnStartup": "Launch on Startup",
+    "launchOnStartupDescription": "Automatically run Videor when system starts",
+    "silentStartup": "Silent Startup",
+    "silentStartupDescription": "Start in background mode without showing main window",
+    "minimizeToTray": "Minimize to tray on close",
+    "minimizeToTrayDescription": "When checked, clicking the close button will hide to system tray, otherwise the app will exit directly.",
+    "useAppWindowControls": "Enable app-level window controls",
+    "useAppWindowControlsDescription": "Use built-in minimize, maximize/restore, and close buttons in the app header.",
+    "checkForUpdates": "Check for Updates",
+    "updating": "Updating...",
+    "checking": "Checking...",
+    "upToDate": "Up to Date",
+    "aboutHint": "View version information and update status.",
+    "portableMode": "Portable mode: updates require manual download.",
+    "updateFailed": "Update installation failed, attempted to open download page.",
+    "checkUpdateFailed": "Failed to check for updates, please try again later.",
+    "restartRequired": "Restart Required",
+    "restartRequiredMessage": "Modifying the Videor configuration directory requires restarting the application to take effect. Restart now?",
+    "restartNow": "Restart Now",
+    "restartLater": "Restart Later",
+    "restartFailed": "Application restart failed, please manually close and reopen.",
+    "devModeRestartHint": "Dev Mode: Automatic restart not supported, please manually restart the application.",
+    "saving": "Saving...",
+    "globalProxy": {
+      "hint": "Configure a global outbound proxy for network requests. Leave empty for direct connection.",
+      "username": "Username (optional)",
+      "password": "Password (optional)",
+      "test": "Test Connection",
+      "scan": "Scan Local Proxies",
+      "clear": "Clear",
+      "saved": "Proxy settings saved",
+      "saveFailed": "Failed to save proxy settings: {{error}}",
+      "scanFailed": "Scan failed: {{error}}",
+      "testFailed": "Test failed: {{error}}",
+      "testSuccess": "Test successful, latency {{latency}}ms"
+    },
+    "autoLaunchFailed": "Failed to set auto launch",
+    "saveFailedGeneric": "Save failed, please try again"
+  },
+  "notifications": {
+    "windowControlFailed": "Window control failed: {{error}}",
+    "settingsSaved": "Settings saved",
+    "settingsSaveFailed": "Failed to save settings"
+  },
+  "errors": {
+    "configLoadFailedTitle": "Config Load Failed",
+    "configLoadFailedMessage": "Failed to load config: {{error}}"
+  },
+  "download": {
+    "emptyUrl": "Please enter a video link",
+    "added": "Added to download queue",
+    "historyCleared": "History cleared",
+    "history": "Download History",
+    "historyTitle": "Download History",
+    "noHistory": "No download records",
+    "urlPlaceholder": "Paste video link, press Enter to start download...",
+    "status": {
+      "pending": "Pending",
+      "downloading": "Downloading",
+      "completed": "Completed",
+      "failed": "Failed"
+    }
+  }
+}
