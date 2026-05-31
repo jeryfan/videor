@@ -252,7 +252,7 @@ fn should_drop_header(name: &str) -> bool {
 }
 
 /// 从分享文本中提取第一个 HTTP(S) URL
-fn extract_url_from_text(text: &str) -> Option<String> {
+pub fn extract_url_from_text(text: &str) -> Option<String> {
     let re = regex::Regex::new(r"https?://[^\s\u{4e00}-\u{9fff}\u{ff01}-\u{ff5e}]+").ok()?;
     re.find(text).map(|m| {
         m.as_str()

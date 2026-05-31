@@ -509,6 +509,7 @@ pub fn run() {
             // Video parser
             commands::parse_video,
             commands::parse_video_with_curl,
+            commands::parse_m3u8,
             commands::bilibili_login_qr_generate,
             commands::bilibili_login_qr_poll,
             commands::bilibili_login_status,

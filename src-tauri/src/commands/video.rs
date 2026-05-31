@@ -1,5 +1,6 @@
 use crate::video::bilibili;
 use crate::video::downloader::DownloadManager;
+use crate::video::m3u8;
 use crate::video::{parse_video_url, parse_video_url_with_curl, VideoFormat, VideoInfo};
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -32,6 +33,22 @@ pub async fn parse_video_with_curl(input: String, raw_curl: String) -> Result<Vi
         input.chars().take(100).collect::<String>()
     );
     parse_video_url_with_curl(&input, &raw_curl).await
+}
+
+#[tauri::command]
+pub async fn parse_m3u8(input: String, raw_curl: Option<String>) -> Result<VideoInfo, String> {
+    log::info!(
+        "[VideoCommand] Parsing M3U8: {}",
+        input.chars().take(100).collect::<String>()
+    );
+    let client = crate::video::create_http_client();
+    let headers = raw_curl
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(crate::video::parse_curl_headers)
+        .transpose()?
+        .filter(|headers| !headers.is_empty());
+    m3u8::parse_m3u8_input(&input, &client, headers.as_ref()).await
 }
 
 #[tauri::command]

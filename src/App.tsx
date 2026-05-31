@@ -294,7 +294,7 @@ function App() {
       : activeSource === "bilibili"
         ? "粘贴 Bilibili 视频、合集或充电合集链接..."
         : activeSource === "m3u8"
-          ? "粘贴 M3U8 播放列表链接，按 Enter 开始解析..."
+          ? "粘贴网页或 M3U8 播放列表链接，按 Enter 开始解析..."
           : "粘贴视频链接，按 Enter 开始解析...";
   const activeBatchCount = batchDownloadItems.filter((item) =>
     ["queued", "parsing", "downloading"].includes(item.status),
@@ -537,6 +537,7 @@ function App() {
       const info = await parseVideo(
         rawInput,
         activeSource === "m3u8" ? m3u8CurlRaw : undefined,
+        activeSource,
       );
       setVideoFormats(info.formats);
       setVideoTitle(info.title);
@@ -554,6 +555,34 @@ function App() {
       setParseStatus("error");
     }
   }, [activeSource, downloadUrl, m3u8CurlRaw, t]);
+
+  const handleSelectM3u8Candidate = useCallback(
+    async (url: string) => {
+      setDownloadUrl(url);
+      setParseStatus("parsing");
+      setVideoFormats([]);
+      setVideoItems([]);
+      setVideoMessage("");
+      try {
+        const info = await parseVideo(url, m3u8CurlRaw, "m3u8");
+        setVideoFormats(info.formats);
+        setVideoTitle(info.title);
+        setVideoCover(info.cover_url || "");
+        setVideoPlatform(info.platform);
+        setVideoItems(info.items || []);
+        setVideoKind(info.kind || "video");
+        setVideoMessage(info.message || "");
+        setVideoLoginRequired(Boolean(info.login_required));
+        setSelectedVideoItems((info.items || []).map((item) => item.id));
+        setParseStatus("success");
+      } catch (error) {
+        console.error("[VideoParser] Failed to parse M3U8 candidate:", error);
+        toast.error(extractErrorMessage(error) || "视频解析失败");
+        setParseStatus("error");
+      }
+    },
+    [m3u8CurlRaw],
+  );
 
   // 监听下载进度
   useEffect(() => {
@@ -1412,6 +1441,44 @@ function App() {
                         </label>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+            {parseStatus === "success" &&
+              activeSource === "m3u8" &&
+              videoItems.length > 0 &&
+              videoFormats.length === 0 && (
+                <div className="mt-3 animate-fade-in space-y-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {videoTitle || "发现多个 M3U8 地址"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {videoMessage || `共 ${videoItems.length} 个候选地址`}
+                    </p>
+                  </div>
+                  <div className="max-h-[calc(100vh-280px)] overflow-y-auto rounded-xl border border-border">
+                    {videoItems.map((item, index) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => void handleSelectM3u8Candidate(item.url)}
+                        className="flex w-full items-center gap-3 border-b border-border px-3 py-2 text-left last:border-b-0 hover:bg-muted/40"
+                      >
+                        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                          {index + 1}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm">
+                            {item.title}
+                          </span>
+                          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                            {item.url}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}

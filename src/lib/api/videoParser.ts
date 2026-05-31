@@ -46,7 +46,14 @@ export interface VideoInfo {
 export async function parseVideo(
   input: string,
   rawCurl?: string,
+  source?: "douyin" | "bilibili" | "m3u8" | "other",
 ): Promise<VideoInfo> {
+  if (source === "m3u8") {
+    return await invoke<VideoInfo>("parse_m3u8", {
+      input,
+      rawCurl: rawCurl?.trim() ? rawCurl : null,
+    });
+  }
   if (rawCurl?.trim()) {
     return await invoke<VideoInfo>("parse_video_with_curl", {
       input,

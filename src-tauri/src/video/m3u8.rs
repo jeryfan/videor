@@ -87,6 +87,116 @@ impl VideoParser for M3u8Parser {
     }
 }
 
+pub async fn parse_m3u8_input(
+    input: &str,
+    client: &reqwest::Client,
+    headers: Option<&HeaderMap>,
+) -> Result<VideoInfo, String> {
+    let url = super::extract_url_from_text(input).unwrap_or_else(|| input.trim().to_string());
+    if url.contains(".m3u8") {
+        return M3u8Parser.parse_with_headers(&url, client, headers).await;
+    }
+
+    let candidates = discover_m3u8_urls(client, &url, headers).await?;
+    match candidates.len() {
+        0 => Err("该网页中没有发现 M3U8 地址".to_string()),
+        1 => {
+            M3u8Parser
+                .parse_with_headers(&candidates[0], client, headers)
+                .await
+        }
+        _ => Ok(VideoInfo {
+            title: "发现多个 M3U8 地址".to_string(),
+            cover_url: None,
+            duration: None,
+            platform: "m3u8".to_string(),
+            formats: Vec::new(),
+            kind: VideoKind::Collection,
+            items: candidates
+                .iter()
+                .enumerate()
+                .map(|(index, url)| VideoItem {
+                    id: format!("m3u8_{}", index + 1),
+                    title: m3u8_candidate_title(index, url),
+                    url: url.clone(),
+                    bvid: None,
+                    cid: None,
+                    page: None,
+                    duration: None,
+                    cover_url: None,
+                })
+                .collect(),
+            login_required: false,
+            message: Some("请选择一个 M3U8 地址继续解析".to_string()),
+            uploader: None,
+        }),
+    }
+}
+
+async fn discover_m3u8_urls(
+    client: &reqwest::Client,
+    page_url: &str,
+    headers: Option<&HeaderMap>,
+) -> Result<Vec<String>, String> {
+    let mut request = client.get(page_url);
+    if let Some(headers) = headers {
+        request = request.headers(headers.clone());
+    }
+    let html = request
+        .send()
+        .await
+        .map_err(|e| format!("网页请求失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("网页响应异常: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("读取网页失败: {e}"))?;
+
+    extract_m3u8_urls(page_url, &html)
+}
+
+fn extract_m3u8_urls(base_url: &str, content: &str) -> Result<Vec<String>, String> {
+    let base = url::Url::parse(base_url).map_err(|e| format!("网页 URL 无效: {e}"))?;
+    let normalized = content
+        .replace("\\/", "/")
+        .replace("&amp;", "&")
+        .replace("\\u002F", "/")
+        .replace("\\u002f", "/");
+    let re = regex::Regex::new(r#"(?i)(https?:)?//[^\s"'<>\\]+?\.m3u8[^\s"'<>\\]*|/[^\s"'<>\\]+?\.m3u8[^\s"'<>\\]*|[A-Za-z0-9._~!$&'()*+,;=:@%/-]+?\.m3u8[^\s"'<>\\]*"#)
+        .map_err(|e| e.to_string())?;
+    let mut urls = Vec::new();
+
+    for matched in re.find_iter(&normalized) {
+        let raw = matched
+            .as_str()
+            .trim_matches(|c| matches!(c, ')' | ']' | '}'));
+        let absolute = if raw.starts_with("//") {
+            format!("{}:{raw}", base.scheme())
+        } else if raw.starts_with("http://") || raw.starts_with("https://") {
+            raw.to_string()
+        } else {
+            base.join(raw)
+                .map_err(|e| format!("M3U8 地址无效: {e}"))?
+                .to_string()
+        };
+        if !urls.contains(&absolute) {
+            urls.push(absolute);
+        }
+    }
+
+    Ok(urls)
+}
+
+fn m3u8_candidate_title(index: usize, url: &str) -> String {
+    let file = url
+        .split('/')
+        .last()
+        .and_then(|value| value.split('?').next())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("video.m3u8");
+    format!("线路 {} · {}", index + 1, file)
+}
+
 async fn fetch_playlist(
     client: &reqwest::Client,
     url: &str,
@@ -236,5 +346,34 @@ high/index.m3u8
 1.ts
 "#;
         assert_eq!(parse_media_duration(playlist), Some(10));
+    }
+
+    #[test]
+    fn extracts_m3u8_urls_from_page_content() {
+        let html = r#"
+<script>
+window.__data = {
+  main: "https:\/\/cdn.example.com\/live\/master.m3u8?token=abc",
+  duplicate: "https://cdn.example.com/live/master.m3u8?token=abc",
+  protocolRelative: "//media.example.com/hls/720p/video.m3u8",
+  relativeRoot: "/streams/480p/video.m3u8",
+  relativeFile: "backup/video.m3u8",
+  unicodeEscaped: "https:\u002F\u002Fcdn.example.com\u002Fescaped\u002Findex.m3u8"
+}
+</script>
+"#;
+
+        let urls = extract_m3u8_urls("https://site.example.com/watch/123", html).expect("urls");
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://cdn.example.com/live/master.m3u8?token=abc",
+                "https://media.example.com/hls/720p/video.m3u8",
+                "https://site.example.com/streams/480p/video.m3u8",
+                "https://site.example.com/watch/backup/video.m3u8",
+                "https://cdn.example.com/escaped/index.m3u8",
+            ]
+        );
     }
 }
