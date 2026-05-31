@@ -476,6 +476,39 @@ function App() {
     }
   };
 
+  const closeCurrentVideo = useCallback(() => {
+    const video = previewVideoRef.current;
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    }
+  }, []);
+
+  const resetParsedVideoState = useCallback(() => {
+    closeCurrentVideo();
+    setParseStatus("idle");
+    setVideoFormats([]);
+    setSelectedFormatIdx(0);
+    setVideoTitle("");
+    setVideoCover("");
+    setVideoPlatform("");
+    setVideoItems([]);
+    setVideoKind("video");
+    setVideoMessage("");
+    setVideoLoginRequired(false);
+    setSelectedVideoItems([]);
+  }, [closeCurrentVideo]);
+
+  const handleSourceSwitch = useCallback(
+    (source: VideoSource) => {
+      if (source === activeSource) return;
+      resetParsedVideoState();
+      setActiveSource(source);
+    },
+    [activeSource, resetParsedVideoState],
+  );
+
   const handleDownload = useCallback(async () => {
     const rawInput = downloadUrl.trim();
     if (!rawInput) {
@@ -971,7 +1004,7 @@ function App() {
             >
               <SourceSwitcher
                 activeSource={activeSource}
-                onSwitch={setActiveSource}
+                onSwitch={handleSourceSwitch}
               />
             </div>
           )}
