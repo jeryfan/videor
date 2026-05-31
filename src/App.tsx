@@ -567,7 +567,7 @@ function App() {
       setDownloadProgress(0);
       setDownloadSpeed(0);
 
-      const format = videoFormats[selectedFormatIdx];
+      const format = videoFormats[0];
       toast.info(`开始下载: ${videoTitle}`);
       const taskId = await startVideoDownload(videoTitle, format, dir);
       setDownloadTaskId(taskId);
@@ -575,7 +575,7 @@ function App() {
       console.error("[Download] Failed to start:", error);
       toast.error(extractErrorMessage(error) || "启动下载失败");
     }
-  }, [videoFormats, videoTitle, selectedFormatIdx, settingsData]);
+  }, [videoFormats, videoTitle, settingsData]);
 
   const ensureDownloadDirectory = useCallback(async () => {
     let dir: string | null = settingsData?.downloadDirectory ?? null;
@@ -639,7 +639,7 @@ function App() {
           ),
         );
         const info = await parseVideo(item.url);
-        const format = info.formats[selectedFormatIdx] || info.formats[0];
+        const format = info.formats[0];
         if (!format) {
           setBatchDownloadItems((items) =>
             items.map((batchItem) =>
@@ -688,7 +688,6 @@ function App() {
     }
   }, [
     ensureDownloadDirectory,
-    selectedFormatIdx,
     selectedVideoItems,
     videoItems,
     videoTitle,

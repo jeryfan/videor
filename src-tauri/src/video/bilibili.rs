@@ -589,6 +589,7 @@ async fn fetch_play_formats(
     if formats.is_empty() {
         return Err("No playable video formats found".to_string());
     }
+    formats.sort_by_key(|format| Reverse(format_quality_rank(&format.quality)));
     Ok(formats)
 }
 
@@ -829,6 +830,24 @@ fn quality_label(id: u64) -> String {
     }
 }
 
+fn format_quality_rank(quality: &str) -> u64 {
+    let base = quality.split_whitespace().next().unwrap_or(quality);
+    match base {
+        "8K" => 127,
+        "杜比视界" => 126,
+        "HDR" => 125,
+        "4K" => 120,
+        "1080P60" => 116,
+        "1080P+" => 112,
+        "1080P" => 80,
+        "720P60" => 74,
+        "720P" => 64,
+        "480P" => 32,
+        "360P" => 16,
+        _ => base.trim_end_matches('P').parse::<u64>().unwrap_or(0),
+    }
+}
+
 fn encode_svg_data_url(svg: &str) -> String {
     svg.replace('%', "%25")
         .replace('#', "%23")
@@ -872,5 +891,13 @@ mod tests {
             dash_video_url(selected),
             Some("https://example.com/h264.m4s")
         );
+    }
+
+    #[test]
+    fn ranks_bilibili_formats_by_download_quality() {
+        assert!(format_quality_rank("1080P") > format_quality_rank("720P"));
+        assert!(format_quality_rank("1080P60") > format_quality_rank("1080P"));
+        assert!(format_quality_rank("4K") > format_quality_rank("1080P60"));
+        assert_eq!(format_quality_rank("1080P (HEVC)"), 80);
     }
 }
