@@ -22,6 +22,8 @@ pub struct AppSettings {
     pub silent_startup: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_directory: Option<String>,
 }
 
 fn default_show_in_tray() -> bool {
@@ -41,6 +43,7 @@ impl Default for AppSettings {
             launch_on_startup: false,
             silent_startup: false,
             language: None,
+            download_directory: dirs::download_dir().map(|p| p.to_string_lossy().to_string()),
         }
     }
 }
@@ -57,6 +60,11 @@ impl AppSettings {
             .map(|s| s.trim())
             .filter(|s| matches!(*s, "en" | "zh"))
             .map(|s| s.to_string());
+        self.download_directory = self
+            .download_directory
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
     }
 
     fn load_from_file() -> Self {

@@ -10,8 +10,6 @@ import {
   Minimize2,
   X,
   Search,
-  Trash2,
-  ExternalLink,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -25,6 +23,8 @@ import {
   DRAG_REGION_STYLE,
 } from "@/lib/platform";
 import { useSettingsQuery } from "@/lib/query";
+import { settingsApi } from "@/lib/api";
+import type { Settings as AppSettings } from "@/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { parseVideo, type VideoFormat } from "@/lib/api/videoParser";
 import {
@@ -38,40 +38,11 @@ import { Download, Loader2 } from "lucide-react";
 const DEFAULT_DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
 const HEADER_HEIGHT = 64; // px
 
-interface DownloadRecord {
-  id: string;
-  url: string;
-  title: string;
-  status: "pending" | "downloading" | "completed" | "failed";
-  createdAt: string;
-}
-
-const HISTORY_STORAGE_KEY = "videor-download-history";
-
-function loadHistory(): DownloadRecord[] {
-  try {
-    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // ignore
-  }
-  return [];
-}
-
-function saveHistory(history: DownloadRecord[]) {
-  try {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
-  } catch {
-    // ignore
-  }
-}
-
 function App() {
   const { t } = useTranslation();
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState("");
-  const [history, setHistory] = useState<DownloadRecord[]>(loadHistory);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [videoFormats, setVideoFormats] = useState<VideoFormat[]>([]);
   const [selectedFormatIdx, setSelectedFormatIdx] = useState(0);
@@ -79,7 +50,9 @@ function App() {
 
   const [videoCover, setVideoCover] = useState("");
   const [videoPlatform, setVideoPlatform] = useState("");
-  const [parseStatus, setParseStatus] = useState<"idle" | "parsing" | "success" | "error">("idle");
+  const [parseStatus, setParseStatus] = useState<
+    "idle" | "parsing" | "success" | "error"
+  >("idle");
 
   // 下载状态
   const [downloadTaskId, setDownloadTaskId] = useState<string | null>(null);
@@ -209,9 +182,11 @@ function App() {
 
     const setup = async () => {
       unlisten = await listenDownloadProgress((progress) => {
-        setDownloadProgress(progress.total && progress.total > 0
-          ? Math.round((progress.downloaded / progress.total) * 100)
-          : 0);
+        setDownloadProgress(
+          progress.total && progress.total > 0
+            ? Math.round((progress.downloaded / progress.total) * 100)
+            : 0,
+        );
         setDownloadSpeed(progress.speed);
 
         if (progress.status === "completed") {
@@ -240,13 +215,25 @@ function App() {
       return;
     }
 
-    toast.info("正在打开目录选择器...");
-
     try {
-      const dir = await invoke<string | null>("pick_directory", {});
+      let dir: string | null = settingsData?.downloadDirectory ?? null;
+
+      // 没有默认目录时，弹出选择器
       if (!dir) {
-        toast.info("未选择保存目录");
-        return;
+        dir = await invoke<string | null>("pick_directory", {});
+        if (!dir) {
+          toast.info("未选择保存目录");
+          return;
+        }
+        // 保存为默认目录
+        try {
+          await settingsApi.save({
+            ...settingsData,
+            downloadDirectory: dir,
+          } as AppSettings);
+        } catch (e) {
+          console.warn("[Download] Failed to save default directory:", e);
+        }
       }
 
       setDownloadError(null);
@@ -261,7 +248,7 @@ function App() {
       console.error("[Download] Failed to start:", error);
       toast.error(extractErrorMessage(error) || "启动下载失败");
     }
-  }, [videoFormats, videoTitle, selectedFormatIdx]);
+  }, [videoFormats, videoTitle, selectedFormatIdx, settingsData]);
 
   const handleCancelDownload = useCallback(async () => {
     if (!downloadTaskId) return;
@@ -271,21 +258,6 @@ function App() {
       console.error("[Download] Failed to cancel:", error);
     }
   }, [downloadTaskId]);
-
-  const handleClearHistory = useCallback(() => {
-    setHistory([]);
-    saveHistory([]);
-    toast.success(t("download.historyCleared", { defaultValue: "历史记录已清空" }));
-  }, [t]);
-
-  const handleRemoveRecord = useCallback(
-    (id: string) => {
-      const next = history.filter((r) => r.id !== id);
-      setHistory(next);
-      saveHistory(next);
-    },
-    [history],
-  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -424,7 +396,7 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in px-6 pt-4">
+      <main className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in px-6">
         {showSettings ? (
           <SettingsPage
             open={true}
@@ -432,75 +404,7 @@ function App() {
             defaultTab="general"
           />
         ) : showHistory ? (
-          <div className="flex flex-col h-full">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">
-                {t("download.historyTitle", { defaultValue: "下载历史" })}
-              </h2>
-              {history.length > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleClearHistory}
-                  className="text-destructive hover:text-destructive"
-                >
-                  <Trash2 className="w-4 h-4 mr-1" />
-                  {t("common.clear", { defaultValue: "清空" })}
-                </Button>
-              )}
-            </div>
-            {history.length === 0 ? (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground">
-                {t("download.noHistory", { defaultValue: "暂无下载记录" })}
-              </div>
-            ) : (
-              <div className="space-y-2 overflow-y-auto">
-                {history.map((record) => (
-                  <div
-                    key={record.id}
-                    className="flex items-center gap-3 p-3 rounded-lg border border-border/50 bg-card/50 hover:bg-card transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                        <span className="text-sm font-medium truncate">
-                          {record.title}
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">
-                        {record.url}
-                      </p>
-                    </div>
-                    <span
-                      className={cn(
-                        "text-xs px-2 py-0.5 rounded-full shrink-0",
-                        record.status === "completed" &&
-                          "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-                        record.status === "pending" &&
-                          "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-                        record.status === "downloading" &&
-                          "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-                        record.status === "failed" &&
-                          "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
-                      )}
-                    >
-                      {t(`download.status.${record.status}`, {
-                        defaultValue: record.status,
-                      })}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 shrink-0"
-                      onClick={() => handleRemoveRecord(record.id)}
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <div className="flex flex-col h-full" />
         ) : (
           <div className="flex flex-col items-center flex-1 px-6">
             <div className="w-full max-w-4xl space-y-4">
@@ -522,7 +426,9 @@ function App() {
               {parseStatus === "parsing" && (
                 <div className="flex items-center justify-center gap-2 py-2 animate-fade-in">
                   <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  <span className="text-sm text-muted-foreground">正在解析视频...</span>
+                  <span className="text-sm text-muted-foreground">
+                    正在解析视频...
+                  </span>
                 </div>
               )}
 
@@ -530,14 +436,13 @@ function App() {
               {parseStatus === "success" && videoFormats.length > 0 && (
                 <div className="animate-fade-in space-y-3">
                   {/* 视频容器：悬浮时显示下载按钮 */}
-                  <div className="relative group">
+                  <div className="relative group flex justify-center rounded-xl">
                     <video
                       key={selectedFormatIdx}
                       src={videoFormats[selectedFormatIdx]?.url}
                       controls
                       poster={videoCover || undefined}
-                      className="w-full rounded-xl bg-muted"
-                      style={{ maxHeight: "65vh" }}
+                      className="h-auto max-h-[65vh] w-auto max-w-full rounded-xl"
                     />
                     {/* 悬浮下载按钮 / 进度 */}
                     <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-end gap-2">
@@ -563,7 +468,10 @@ function App() {
                               <div className="flex justify-between text-[10px] text-white/80 mt-0.5">
                                 <span>{downloadProgress}%</span>
                                 {downloadSpeed > 0 && (
-                                  <span>{(downloadSpeed / 1024 / 1024).toFixed(1)} MB/s</span>
+                                  <span>
+                                    {(downloadSpeed / 1024 / 1024).toFixed(1)}{" "}
+                                    MB/s
+                                  </span>
                                 )}
                               </div>
                             </div>
@@ -592,10 +500,14 @@ function App() {
                       {/* 清晰度选择 */}
                       {videoFormats.length > 1 && (
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground">清晰度:</span>
+                          <span className="text-xs text-muted-foreground">
+                            清晰度:
+                          </span>
                           <select
                             value={selectedFormatIdx}
-                            onChange={(e) => setSelectedFormatIdx(Number(e.target.value))}
+                            onChange={(e) =>
+                              setSelectedFormatIdx(Number(e.target.value))
+                            }
                             className="text-xs bg-background border border-border rounded-md px-2 py-1 outline-none focus:border-primary"
                           >
                             {videoFormats.map((fmt, idx) => (
@@ -608,13 +520,20 @@ function App() {
                       )}
                       {videoPlatform && (
                         <span className="text-xs text-muted-foreground">
-                          来源: {videoPlatform === "douyin" ? "抖音" : videoPlatform === "bilibili" ? "B站" : "直链"}
+                          来源:{" "}
+                          {videoPlatform === "douyin"
+                            ? "抖音"
+                            : videoPlatform === "bilibili"
+                              ? "B站"
+                              : "直链"}
                         </span>
                       )}
                     </div>
 
                     {downloadError && (
-                      <p className="text-xs text-destructive">{downloadError}</p>
+                      <p className="text-xs text-destructive">
+                        {downloadError}
+                      </p>
                     )}
                   </div>
                 </div>

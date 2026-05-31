@@ -93,6 +93,7 @@ export function useSettingsForm(): UseSettingsFormResult {
       useAppWindowControls: data.useAppWindowControls ?? false,
       silentStartup: data.silentStartup ?? false,
       language: normalizedLanguage,
+      downloadDirectory: data.downloadDirectory,
     };
 
     setSettingsState(normalized);
@@ -111,6 +112,7 @@ export function useSettingsForm(): UseSettingsFormResult {
             useAppWindowControls: false,
             silentStartup: false,
             language: readPersistedLanguage(),
+            downloadDirectory: undefined,
           } as SettingsFormState);
 
         const next: SettingsFormState = {
@@ -145,6 +147,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         useAppWindowControls: serverData.useAppWindowControls ?? false,
         silentStartup: serverData.silentStartup ?? false,
         language: normalizedLanguage,
+        downloadDirectory: serverData.downloadDirectory,
       };
 
       setSettingsState(normalized);

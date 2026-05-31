@@ -20,6 +20,8 @@ export interface Settings {
   windowBehavior?: "normal" | "minimize" | "tray";
   // 全局代理
   globalProxy?: string;
+  // 默认下载目录
+  downloadDirectory?: string;
 
   // Backend may send additional fields; accept them silently
   [key: string]: any;

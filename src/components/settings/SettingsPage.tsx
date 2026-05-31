@@ -22,6 +22,7 @@ import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
 import { GlobalProxySettings } from "@/components/settings/GlobalProxySettings";
+import { DownloadDirectorySettings } from "@/components/settings/DownloadDirectorySettings";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "react-i18next";
@@ -139,10 +140,11 @@ export function SettingsPage({
           onValueChange={setActiveTab}
           className="flex flex-col h-full"
         >
-          <TabsList className="grid w-full grid-cols-2 mb-6 glass rounded-lg">
+          <TabsList className="grid w-full grid-cols-3 mb-6 glass rounded-lg">
             <TabsTrigger value="general">
               {t("settings.tabGeneral")}
             </TabsTrigger>
+            <TabsTrigger value="download">{t("settings.tabDownload", { defaultValue: "下载" })}</TabsTrigger>
             <TabsTrigger value="about">{t("common.about")}</TabsTrigger>
           </TabsList>
 
@@ -197,12 +199,27 @@ export function SettingsPage({
                 ) : null}
               </TabsContent>
 
+              <TabsContent value="download" className="space-y-6 mt-0">
+                {settings ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="space-y-6"
+                  >
+                    <DownloadDirectorySettings
+                      directory={settings.downloadDirectory}
+                      onChange={handleAutoSave}
+                    />
+                  </motion.div>
+                ) : null}
+              </TabsContent>
               <TabsContent value="about" className="mt-0">
                 <AboutSection isPortable={isPortable} />
               </TabsContent>
             </div>
 
-            {activeTab === "general" && settings && (
+            {(activeTab === "general" || activeTab === "download") && settings && (
               <div
                 className="flex-shrink-0 pt-4 border-t border-border-default"
                 style={{ backgroundColor: "hsl(var(--background))" }}
