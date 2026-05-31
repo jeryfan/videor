@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Videor - Desktop utility application"
 authors = ["Jason Young"]
 license = "MIT"
-repository = "https://github.com/farion1231/videor"
+repository = "https://github.com/jeryfan/videor"
 edition = "2021"
 rust-version = "1.85.0"
 
