@@ -10,6 +10,12 @@ import {
   Minimize2,
   X,
   Search,
+  Music2,
+  Tv,
+  Radio,
+  Link2,
+  Download,
+  Loader2,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SettingsPage } from "@/components/settings/SettingsPage";
@@ -33,15 +39,82 @@ import {
   listenDownloadProgress,
 } from "@/lib/api/download";
 import { invoke } from "@tauri-apps/api/core";
-import { Download, Loader2 } from "lucide-react";
 
 const DEFAULT_DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
 const HEADER_HEIGHT = 64; // px
+const VIDEO_SOURCE_STORAGE_KEY = "videor-active-source";
+
+type VideoSource = "douyin" | "bilibili" | "m3u8" | "other";
+
+const VIDEO_SOURCES: Array<{
+  id: VideoSource;
+  label: string;
+  icon: typeof Music2;
+}> = [
+  { id: "douyin", label: "抖音", icon: Music2 },
+  { id: "bilibili", label: "Bilibili", icon: Tv },
+  { id: "m3u8", label: "M3U8", icon: Radio },
+  { id: "other", label: "其他", icon: Link2 },
+];
+
+const getInitialVideoSource = (): VideoSource => {
+  const saved = localStorage.getItem(VIDEO_SOURCE_STORAGE_KEY) as
+    | VideoSource
+    | null;
+  if (saved && VIDEO_SOURCES.some((source) => source.id === saved)) {
+    return saved;
+  }
+  return "douyin";
+};
+
+function SourceSwitcher({
+  activeSource,
+  onSwitch,
+}: {
+  activeSource: VideoSource;
+  onSwitch: (source: VideoSource) => void;
+}) {
+  const handleSwitch = (source: VideoSource) => {
+    if (source === activeSource) return;
+    localStorage.setItem(VIDEO_SOURCE_STORAGE_KEY, source);
+    onSwitch(source);
+  };
+
+  return (
+    <div className="inline-flex max-w-full items-center gap-1 rounded-xl bg-muted p-1">
+      {VIDEO_SOURCES.map(({ id, label, icon: Icon }) => {
+        const isActive = id === activeSource;
+        return (
+          <button
+            key={id}
+            type="button"
+            onClick={() => handleSwitch(id)}
+            title={label}
+            className={cn(
+              "group inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-all duration-200",
+              isActive
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
+            )}
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            <span className="ml-2 whitespace-nowrap transition-all duration-200 max-[760px]:ml-0 max-[760px]:max-w-0 max-[760px]:overflow-hidden max-[760px]:opacity-0">
+              {label}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function App() {
   const { t } = useTranslation();
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [activeSource, setActiveSource] = useState<VideoSource>(
+    getInitialVideoSource,
+  );
   const [downloadUrl, setDownloadUrl] = useState("");
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [videoFormats, setVideoFormats] = useState<VideoFormat[]>([]);
@@ -73,6 +146,14 @@ function App() {
         : videoPlatform
           ? "直链"
           : "";
+  const downloadPlaceholder =
+    activeSource === "douyin"
+      ? "粘贴抖音视频链接，按 Enter 开始解析..."
+      : activeSource === "bilibili"
+        ? "粘贴 Bilibili 视频、合集或充电合集链接..."
+        : activeSource === "m3u8"
+          ? "粘贴 M3U8 播放列表链接，按 Enter 开始解析..."
+          : "粘贴视频链接，按 Enter 开始解析...";
 
   useEffect(() => {
     let active = true;
@@ -341,12 +422,12 @@ function App() {
         }
       >
         <div
-          className="flex h-full items-center justify-between gap-2 px-6"
+          className="grid h-full grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 px-6"
           {...DRAG_REGION_ATTR}
           style={{ ...DRAG_REGION_STYLE } as any}
         >
           <div
-            className="flex items-center gap-2"
+            className="flex min-w-0 items-center gap-2 justify-self-start"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
             {showSettings || showHistory ? (
@@ -382,8 +463,20 @@ function App() {
             )}
           </div>
 
+          {!showSettings && !showHistory && (
+            <div
+              className="min-w-0 justify-self-center"
+              style={{ WebkitAppRegion: "no-drag" } as any}
+            >
+              <SourceSwitcher
+                activeSource={activeSource}
+                onSwitch={setActiveSource}
+              />
+            </div>
+          )}
+
           <div
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 justify-self-end"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
             {!showSettings && (
@@ -424,8 +517,8 @@ function App() {
                     value={downloadUrl}
                     onChange={(e) => setDownloadUrl(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder={t("download.urlPlaceholder", {
-                      defaultValue: "粘贴视频链接，按 Enter 开始解析...",
+                    placeholder={t(`download.urlPlaceholder.${activeSource}`, {
+                      defaultValue: downloadPlaceholder,
                     })}
                     className="w-full h-14 pl-11 pr-5 text-base rounded-2xl border border-border bg-background/60 shadow-none focus:ring-0 focus:border-border focus:shadow-none"
                   />
