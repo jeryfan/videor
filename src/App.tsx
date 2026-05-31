@@ -21,6 +21,8 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  FolderOpen,
+  Play,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { join } from "@tauri-apps/api/path";
@@ -59,6 +61,11 @@ import {
   startVideoDownload,
   cancelVideoDownload,
   listenDownloadProgress,
+  getDownloadHistory,
+  saveDownloadHistory,
+  clearDownloadHistory,
+  openDownloadFile,
+  revealDownloadFile,
 } from "@/lib/api/download";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -78,11 +85,42 @@ type BatchDownloadStatus =
 interface BatchDownloadItem {
   id: string;
   title: string;
+  url: string;
+  order: number;
   taskId?: string;
   status: BatchDownloadStatus;
   progress: number;
   speed: number;
   error?: string;
+  filePath?: string;
+}
+
+interface SingleDownloadTask {
+  id: string;
+  title: string;
+  source: VideoSource;
+  status: BatchDownloadStatus;
+  progress: number;
+  speed: number;
+  error?: string;
+  filePath?: string;
+}
+
+interface DownloadHistoryTask {
+  id: string;
+  type: "single" | "batch";
+  title: string;
+  source: VideoSource;
+  resourceKey?: string;
+  status: BatchDownloadStatus;
+  progress: number;
+  speed: number;
+  error?: string;
+  filePath?: string;
+  items?: BatchDownloadItem[];
+  expanded?: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 const VIDEO_SOURCES: Array<{
@@ -181,6 +219,322 @@ function batchStatusLabel(status: BatchDownloadStatus): string {
   }
 }
 
+function downloadStatusClass(status: BatchDownloadStatus): string {
+  if (status === "completed") return "text-emerald-600";
+  if (status === "failed") return "text-destructive";
+  if (status === "cancelled") return "text-muted-foreground";
+  return "text-muted-foreground";
+}
+
+function formatDownloadSpeed(speed: number): string {
+  if (speed <= 0) return "-";
+  return `${(speed / 1024 / 1024).toFixed(1)}MB/s`;
+}
+
+function downloadResourceKey(source: VideoSource, url: string): string {
+  return `${source}:${url.trim()}`;
+}
+
+function hasActiveDownloadForResource(
+  tasks: DownloadHistoryTask[],
+  resourceKeys: string[],
+): boolean {
+  const keySet = new Set(resourceKeys.filter(Boolean));
+  return tasks.some((task) => {
+    if (!["queued", "parsing", "downloading"].includes(task.status)) {
+      return false;
+    }
+    if (task.resourceKey && keySet.has(task.resourceKey)) return true;
+    return (task.items || []).some((item) =>
+      keySet.has(downloadResourceKey(task.source, item.url)),
+    );
+  });
+}
+
+function normalizePersistedStatus(
+  status: BatchDownloadStatus,
+): BatchDownloadStatus {
+  return ["queued", "parsing", "downloading"].includes(status)
+    ? "cancelled"
+    : status;
+}
+
+function isBatchDownloadStatus(value: unknown): value is BatchDownloadStatus {
+  return (
+    typeof value === "string" &&
+    [
+      "queued",
+      "parsing",
+      "downloading",
+      "completed",
+      "failed",
+      "cancelled",
+    ].includes(value)
+  );
+}
+
+function restoreSingleDownloadTask(value: unknown): SingleDownloadTask | null {
+  if (!value || typeof value !== "object") return null;
+  const task = value as Partial<SingleDownloadTask>;
+  if (
+    typeof task.id !== "string" ||
+    typeof task.title !== "string" ||
+    !task.source ||
+    !VIDEO_SOURCES.some((source) => source.id === task.source) ||
+    !isBatchDownloadStatus(task.status)
+  ) {
+    return null;
+  }
+
+  const status = normalizePersistedStatus(task.status);
+  return {
+    id: task.id,
+    title: task.title,
+    source: task.source,
+    status,
+    progress:
+      typeof task.progress === "number" && Number.isFinite(task.progress)
+        ? task.progress
+        : status === "completed"
+          ? 100
+          : 0,
+    speed: 0,
+    error:
+      status === "cancelled" && task.status !== "cancelled"
+        ? "应用已退出，任务已停止"
+        : typeof task.error === "string"
+          ? task.error
+          : undefined,
+    filePath: typeof task.filePath === "string" ? task.filePath : undefined,
+  };
+}
+
+function restoreBatchDownloadItems(value: unknown): BatchDownloadItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    if (!item || typeof item !== "object") return [];
+    const task = item as Partial<BatchDownloadItem>;
+    if (
+      typeof task.id !== "string" ||
+      typeof task.title !== "string" ||
+      typeof task.url !== "string" ||
+      !isBatchDownloadStatus(task.status)
+    ) {
+      return [];
+    }
+    const status = normalizePersistedStatus(task.status);
+    return [
+      {
+        id: task.id,
+        title: task.title,
+        url: task.url,
+        order:
+          typeof task.order === "number" && Number.isFinite(task.order)
+            ? task.order
+            : index,
+        taskId:
+          status === "cancelled" && task.status !== "cancelled"
+            ? undefined
+            : typeof task.taskId === "string"
+              ? task.taskId
+              : undefined,
+        status,
+        progress:
+          typeof task.progress === "number" && Number.isFinite(task.progress)
+            ? task.progress
+            : status === "completed"
+              ? 100
+              : 0,
+        speed: 0,
+        error:
+          status === "cancelled" && task.status !== "cancelled"
+            ? "应用已退出，任务已停止"
+            : typeof task.error === "string"
+              ? task.error
+              : undefined,
+        filePath: typeof task.filePath === "string" ? task.filePath : undefined,
+      },
+    ];
+  });
+}
+
+function calculateBatchTaskState(
+  items: BatchDownloadItem[],
+): Pick<DownloadHistoryTask, "status" | "progress" | "speed"> {
+  if (items.length === 0) {
+    return { status: "queued", progress: 0, speed: 0 };
+  }
+  const activeCount = items.filter((item) =>
+    ["queued", "parsing", "downloading"].includes(item.status),
+  ).length;
+  const completedCount = items.filter(
+    (item) => item.status === "completed",
+  ).length;
+  const failedCount = items.filter((item) => item.status === "failed").length;
+  const cancelledCount = items.filter(
+    (item) => item.status === "cancelled",
+  ).length;
+  const progress = Math.round(
+    items.reduce((sum, item) => sum + item.progress, 0) / items.length,
+  );
+  const speed = items
+    .filter((item) => item.status === "downloading")
+    .reduce((sum, item) => sum + item.speed, 0);
+
+  if (activeCount > 0) {
+    return {
+      status:
+        completedCount + failedCount + cancelledCount === 0
+          ? "queued"
+          : "downloading",
+      progress,
+      speed,
+    };
+  }
+  if (failedCount > 0) return { status: "failed", progress, speed };
+  if (completedCount === items.length) {
+    return { status: "completed", progress: 100, speed };
+  }
+  if (cancelledCount > 0) return { status: "cancelled", progress, speed };
+  return { status: "queued", progress, speed };
+}
+
+function updateBatchItem(
+  tasks: DownloadHistoryTask[],
+  taskId: string,
+  itemId: string,
+  patch: Partial<BatchDownloadItem>,
+): DownloadHistoryTask[] {
+  const now = Date.now();
+  return tasks.map((task) => {
+    if (task.id !== taskId || task.type !== "batch" || !task.items) {
+      return task;
+    }
+    const items = task.items.map((item) =>
+      item.id === itemId ? { ...item, ...patch } : item,
+    );
+    return {
+      ...task,
+      ...calculateBatchTaskState(items),
+      items,
+      updatedAt: now,
+    };
+  });
+}
+
+function cancelQueuedBatchItems(
+  tasks: DownloadHistoryTask[],
+  taskId: string,
+): DownloadHistoryTask[] {
+  const now = Date.now();
+  return tasks.map((task) => {
+    if (task.id !== taskId || task.type !== "batch" || !task.items) {
+      return task;
+    }
+    const items = task.items.map((item) =>
+      ["queued", "parsing"].includes(item.status)
+        ? {
+            ...item,
+            status: "cancelled" as BatchDownloadStatus,
+            error: undefined,
+          }
+        : item,
+    );
+    return {
+      ...task,
+      ...calculateBatchTaskState(items),
+      items,
+      updatedAt: now,
+    };
+  });
+}
+
+function restoreDownloadHistoryTasks(history: any): DownloadHistoryTask[] {
+  const now = Date.now();
+  if (Array.isArray(history?.tasks)) {
+    return history.tasks.flatMap((task: any, index: number) => {
+      if (
+        !task ||
+        typeof task !== "object" ||
+        typeof task.id !== "string" ||
+        typeof task.title !== "string" ||
+        !VIDEO_SOURCES.some((source) => source.id === task.source) ||
+        (task.type !== "single" && task.type !== "batch") ||
+        !isBatchDownloadStatus(task.status)
+      ) {
+        return [];
+      }
+
+      if (task.type === "batch") {
+        const items = restoreBatchDownloadItems(task.items);
+        const state = calculateBatchTaskState(items);
+        return [
+          {
+            id: task.id,
+            type: "batch",
+            title: task.title,
+            source: task.source,
+            resourceKey:
+              typeof task.resourceKey === "string"
+                ? task.resourceKey
+                : undefined,
+            ...state,
+            items,
+            expanded: Boolean(task.expanded),
+            createdAt:
+              typeof task.createdAt === "number" ? task.createdAt : now - index,
+            updatedAt:
+              typeof task.updatedAt === "number" ? task.updatedAt : now - index,
+          },
+        ];
+      }
+
+      const restored = restoreSingleDownloadTask(task);
+      if (!restored) return [];
+      return [
+        {
+          ...restored,
+          type: "single",
+          resourceKey:
+            typeof task.resourceKey === "string" ? task.resourceKey : undefined,
+          createdAt:
+            typeof task.createdAt === "number" ? task.createdAt : now - index,
+          updatedAt:
+            typeof task.updatedAt === "number" ? task.updatedAt : now - index,
+        },
+      ];
+    });
+  }
+
+  const tasks: DownloadHistoryTask[] = [];
+  const single = restoreSingleDownloadTask(history?.singleDownloadTask);
+  if (single) {
+    tasks.push({
+      ...single,
+      type: "single",
+      resourceKey: undefined,
+      createdAt: now - 1,
+      updatedAt: now - 1,
+    });
+  }
+  const items = restoreBatchDownloadItems(history?.batchDownloadItems);
+  if (items.length > 0) {
+    tasks.push({
+      id: `batch_${now}`,
+      type: "batch",
+      title: history?.batchDownloadTitle || "Bilibili 批量下载",
+      source: "bilibili",
+      resourceKey: undefined,
+      ...calculateBatchTaskState(items),
+      items,
+      expanded: Boolean(history?.isBatchHistoryExpanded),
+      createdAt: now - 2,
+      updatedAt: now - 2,
+    });
+  }
+  return tasks;
+}
+
 function SourceSwitcher({
   activeSource,
   onSwitch,
@@ -258,15 +612,15 @@ function App() {
 
   // 下载状态
   const [downloadTaskId, setDownloadTaskId] = useState<string | null>(null);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [downloadSpeed, setDownloadSpeed] = useState(0);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [batchDownloadItems, setBatchDownloadItems] = useState<
-    BatchDownloadItem[]
+  const [downloadHistoryTasks, setDownloadHistoryTasks] = useState<
+    DownloadHistoryTask[]
   >([]);
-  const [isBatchHistoryExpanded, setIsBatchHistoryExpanded] = useState(false);
+  const [isDownloadHistoryLoaded, setIsDownloadHistoryLoaded] = useState(false);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
-  const batchTaskIdsRef = useRef<Set<string>>(new Set());
+  const batchRunIdRef = useRef(0);
+  const activeDownloadResourceKeysRef = useRef<Set<string>>(new Set());
+  const downloadTaskResourceKeysRef = useRef<Map<string, string[]>>(new Map());
 
   const { data: settingsData } = useSettingsQuery();
   const useAppWindowControls =
@@ -296,33 +650,55 @@ function App() {
         : activeSource === "m3u8"
           ? "粘贴网页或 M3U8 播放列表链接，按 Enter 开始解析..."
           : "粘贴视频链接，按 Enter 开始解析...";
-  const activeBatchCount = batchDownloadItems.filter((item) =>
-    ["queued", "parsing", "downloading"].includes(item.status),
+  const activeDownloadCount = downloadHistoryTasks.filter((task) =>
+    ["queued", "parsing", "downloading"].includes(task.status),
   ).length;
-  const completedBatchCount = batchDownloadItems.filter(
-    (item) => item.status === "completed",
+  const activeBatchCount = downloadHistoryTasks.filter(
+    (task) =>
+      task.type === "batch" &&
+      ["queued", "parsing", "downloading"].includes(task.status),
   ).length;
-  const failedBatchCount = batchDownloadItems.filter(
-    (item) => item.status === "failed",
-  ).length;
-  const batchOverallProgress =
-    batchDownloadItems.length > 0
-      ? Math.round(
-          batchDownloadItems.reduce((sum, item) => sum + item.progress, 0) /
-            batchDownloadItems.length,
-        )
-      : 0;
-  const batchStatus =
-    batchDownloadItems.length === 0
-      ? "queued"
-      : failedBatchCount > 0 && activeBatchCount === 0
-        ? "failed"
-        : completedBatchCount === batchDownloadItems.length
-          ? "completed"
-          : activeBatchCount > 0
-            ? "downloading"
-            : "queued";
   const m3u8CurlHeaderCount = countUsableCurlHeaders(m3u8CurlRaw);
+  const hasDownloadTasks = downloadHistoryTasks.length > 0;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadHistory = async () => {
+      try {
+        const history = await getDownloadHistory();
+        if (cancelled || !history) return;
+
+        setDownloadHistoryTasks(restoreDownloadHistoryTasks(history));
+      } catch (error) {
+        console.error("[DownloadHistory] Failed to load:", error);
+      } finally {
+        if (!cancelled) {
+          setIsDownloadHistoryLoaded(true);
+        }
+      }
+    };
+
+    void loadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isDownloadHistoryLoaded) return;
+
+    const handle = window.setTimeout(() => {
+      void saveDownloadHistory({
+        tasks: downloadHistoryTasks,
+        updatedAt: Date.now(),
+      }).catch((error) => {
+        console.error("[DownloadHistory] Failed to save:", error);
+      });
+    }, 300);
+
+    return () => window.clearTimeout(handle);
+  }, [downloadHistoryTasks, isDownloadHistoryLoaded]);
 
   useEffect(() => {
     let active = true;
@@ -504,6 +880,7 @@ function App() {
     (source: VideoSource) => {
       if (source === activeSource) return;
       resetParsedVideoState();
+      setDownloadUrl("");
       setActiveSource(source);
     },
     [activeSource, resetParsedVideoState],
@@ -529,9 +906,6 @@ function App() {
     setVideoMessage("");
     setVideoLoginRequired(false);
     setSelectedVideoItems([]);
-    setBatchDownloadItems([]);
-    setIsBatchHistoryExpanded(false);
-    batchTaskIdsRef.current.clear();
 
     try {
       const info = await parseVideo(
@@ -590,53 +964,100 @@ function App() {
 
     const setup = async () => {
       unlisten = await listenDownloadProgress((progress) => {
-        if (batchTaskIdsRef.current.has(progress.task_id)) {
-          setBatchDownloadItems((items) =>
-            items.map((item) => {
-              if (item.taskId !== progress.task_id) return item;
+        setDownloadHistoryTasks((tasks) => {
+          const now = Date.now();
 
+          return tasks.map((task) => {
+            const nextStatus: BatchDownloadStatus =
+              progress.status === "completed"
+                ? "completed"
+                : progress.status === "failed"
+                  ? "failed"
+                  : progress.status === "cancelled"
+                    ? "cancelled"
+                    : "downloading";
+
+            if (task.type === "single" && task.id === progress.task_id) {
+              const percent =
+                progress.total && progress.total > 0
+                  ? Math.round((progress.downloaded / progress.total) * 100)
+                  : task.progress;
+              return {
+                ...task,
+                status: nextStatus,
+                progress: nextStatus === "completed" ? 100 : percent,
+                speed: progress.speed,
+                error: progress.status === "failed" ? "下载失败" : task.error,
+                filePath: progress.file_path || task.filePath,
+                updatedAt: now,
+              };
+            }
+
+            if (task.type !== "batch" || !task.items) return task;
+            let changed = false;
+            const items = task.items.map((item) => {
+              if (item.taskId !== progress.task_id) return item;
+              changed = true;
               const percent =
                 progress.total && progress.total > 0
                   ? Math.round((progress.downloaded / progress.total) * 100)
                   : item.progress;
-              const nextStatus =
-                progress.status === "completed"
-                  ? "completed"
-                  : progress.status === "failed"
-                    ? "failed"
-                    : progress.status === "cancelled"
-                      ? "cancelled"
-                      : "downloading";
-
               return {
                 ...item,
                 status: nextStatus,
                 progress: nextStatus === "completed" ? 100 : percent,
                 speed: progress.speed,
                 error: progress.status === "failed" ? "下载失败" : item.error,
+                filePath: progress.file_path || item.filePath,
               };
-            }),
-          );
-          return;
-        }
-
-        setDownloadProgress(
-          progress.total && progress.total > 0
-            ? Math.round((progress.downloaded / progress.total) * 100)
-            : 0,
-        );
-        setDownloadSpeed(progress.speed);
+            });
+            if (!changed) return task;
+            return {
+              ...task,
+              ...calculateBatchTaskState(items),
+              items,
+              updatedAt: now,
+            };
+          });
+        });
 
         if (progress.status === "completed") {
           toast.success("下载完成");
-          setDownloadTaskId(null);
+          const keys = downloadTaskResourceKeysRef.current.get(
+            progress.task_id,
+          );
+          keys?.forEach((key) =>
+            activeDownloadResourceKeysRef.current.delete(key),
+          );
+          downloadTaskResourceKeysRef.current.delete(progress.task_id);
+          setDownloadTaskId((taskId) =>
+            taskId === progress.task_id ? null : taskId,
+          );
         } else if (progress.status === "failed") {
           setDownloadError("下载失败");
           toast.error("下载失败");
-          setDownloadTaskId(null);
+          const keys = downloadTaskResourceKeysRef.current.get(
+            progress.task_id,
+          );
+          keys?.forEach((key) =>
+            activeDownloadResourceKeysRef.current.delete(key),
+          );
+          downloadTaskResourceKeysRef.current.delete(progress.task_id);
+          setDownloadTaskId((taskId) =>
+            taskId === progress.task_id ? null : taskId,
+          );
         } else if (progress.status === "cancelled") {
           toast.info("下载已取消");
-          setDownloadTaskId(null);
+          const keys = downloadTaskResourceKeysRef.current.get(
+            progress.task_id,
+          );
+          keys?.forEach((key) =>
+            activeDownloadResourceKeysRef.current.delete(key),
+          );
+          downloadTaskResourceKeysRef.current.delete(progress.task_id);
+          setDownloadTaskId((taskId) =>
+            taskId === progress.task_id ? null : taskId,
+          );
         }
       });
     };
@@ -654,6 +1075,27 @@ function App() {
     }
 
     try {
+      const format = videoFormats[0];
+      const resourceKeys = Array.from(
+        new Set(
+          [format.url, downloadUrl.trim()]
+            .filter(Boolean)
+            .map((url) => downloadResourceKey(activeSource, url)),
+        ),
+      );
+      const resourceKey = resourceKeys[0];
+      if (
+        hasActiveDownloadForResource(downloadHistoryTasks, resourceKeys) ||
+        resourceKeys.some((key) =>
+          activeDownloadResourceKeysRef.current.has(key),
+        )
+      ) {
+        toast.info("该视频正在下载中");
+        return;
+      }
+      resourceKeys.forEach((key) =>
+        activeDownloadResourceKeysRef.current.add(key),
+      );
       let dir: string | null = settingsData?.downloadDirectory ?? null;
 
       // 没有默认目录时，弹出选择器
@@ -675,18 +1117,45 @@ function App() {
       }
 
       setDownloadError(null);
-      setDownloadProgress(0);
-      setDownloadSpeed(0);
 
-      const format = videoFormats[0];
       toast.info(`开始下载: ${videoTitle}`);
       const taskId = await startVideoDownload(videoTitle, format, dir);
+      downloadTaskResourceKeysRef.current.set(taskId, resourceKeys);
       setDownloadTaskId(taskId);
+      const now = Date.now();
+      setDownloadHistoryTasks((tasks) => [
+        {
+          id: taskId,
+          type: "single",
+          title: videoTitle,
+          source: activeSource,
+          resourceKey,
+          status: "downloading",
+          progress: 0,
+          speed: 0,
+          filePath: undefined,
+          createdAt: now,
+          updatedAt: now,
+        },
+        ...tasks,
+      ]);
     } catch (error) {
+      const format = videoFormats[0];
+      [format?.url, downloadUrl.trim()]
+        .filter(Boolean)
+        .map((url) => downloadResourceKey(activeSource, url as string))
+        .forEach((key) => activeDownloadResourceKeysRef.current.delete(key));
       console.error("[Download] Failed to start:", error);
       toast.error(extractErrorMessage(error) || "启动下载失败");
     }
-  }, [videoFormats, videoTitle, settingsData]);
+  }, [
+    activeSource,
+    downloadHistoryTasks,
+    downloadUrl,
+    videoFormats,
+    videoTitle,
+    settingsData,
+  ]);
 
   const ensureDownloadDirectory = useCallback(async () => {
     let dir: string | null = settingsData?.downloadDirectory ?? null;
@@ -717,96 +1186,265 @@ function App() {
       return;
     }
 
+    const activeResourceKeys = new Set(
+      downloadHistoryTasks.flatMap((task) => {
+        if (!["queued", "parsing", "downloading"].includes(task.status)) {
+          return [];
+        }
+        return [
+          ...(task.resourceKey ? [task.resourceKey] : []),
+          ...(task.items || []).map((item) =>
+            downloadResourceKey(task.source, item.url),
+          ),
+        ];
+      }),
+    );
+    const downloadableItems = selectedItems.filter(
+      (item) =>
+        !activeResourceKeys.has(downloadResourceKey("bilibili", item.url)),
+    );
+    const skippedCount = selectedItems.length - downloadableItems.length;
+    if (downloadableItems.length === 0) {
+      toast.info("选中的视频都在下载中");
+      return;
+    }
+
     const dir = await ensureDownloadDirectory();
     if (!dir) return;
 
     const collectionDir = await join(dir, sanitizePathSegment(videoTitle));
-    batchTaskIdsRef.current.clear();
-    setIsBatchHistoryExpanded(true);
-    setBatchDownloadItems(
-      selectedItems.map((item) => ({
-        id: item.id,
-        title: item.title,
-        status: "queued",
-        progress: 0,
-        speed: 0,
-      })),
-    );
+    const runId = batchRunIdRef.current + 1;
+    batchRunIdRef.current = runId;
+    const historyTaskId = `batch_${crypto.randomUUID()}`;
+    const now = Date.now();
+    const initialItems = downloadableItems.map((item, index) => ({
+      id: item.id,
+      title: item.title,
+      url: item.url,
+      order: index,
+      status: "queued" as BatchDownloadStatus,
+      progress: 0,
+      speed: 0,
+    }));
+    setDownloadHistoryTasks((tasks) => [
+      {
+        id: historyTaskId,
+        type: "batch",
+        title: videoTitle || "Bilibili 批量下载",
+        source: "bilibili",
+        ...calculateBatchTaskState(initialItems),
+        items: initialItems,
+        expanded: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+      ...tasks,
+    ]);
     toast.info(
-      `已开始批量解析 ${selectedItems.length} 个 Bilibili 视频，保存到合集目录`,
+      `已开始批量解析 ${downloadableItems.length} 个 Bilibili 视频，保存到合集目录${
+        skippedCount > 0 ? `，已跳过 ${skippedCount} 个正在下载的视频` : ""
+      }`,
     );
 
-    for (const [idx, item] of selectedItems.entries()) {
+    for (const [idx, item] of downloadableItems.entries()) {
       try {
+        if (batchRunIdRef.current !== runId) break;
         // 保守节奏：逐条解析并启动，避免短时间大量请求 B 站接口。
         if (idx > 0) {
           await new Promise((resolve) => window.setTimeout(resolve, 1500));
+          if (batchRunIdRef.current !== runId) break;
         }
-        setBatchDownloadItems((items) =>
-          items.map((batchItem) =>
-            batchItem.id === item.id
-              ? { ...batchItem, status: "parsing", error: undefined }
-              : batchItem,
-          ),
+        setDownloadHistoryTasks((tasks) =>
+          updateBatchItem(tasks, historyTaskId, item.id, {
+            status: "parsing",
+            error: undefined,
+          }),
         );
         const info = await parseVideo(item.url);
+        if (batchRunIdRef.current !== runId) {
+          setDownloadHistoryTasks((tasks) =>
+            updateBatchItem(tasks, historyTaskId, item.id, {
+              status: "cancelled",
+              error: undefined,
+            }),
+          );
+          break;
+        }
         const format = info.formats[0];
         if (!format) {
-          setBatchDownloadItems((items) =>
-            items.map((batchItem) =>
-              batchItem.id === item.id
-                ? {
-                    ...batchItem,
-                    status: "failed",
-                    error: "未找到可下载清晰度",
-                  }
-                : batchItem,
-            ),
+          setDownloadHistoryTasks((tasks) =>
+            updateBatchItem(tasks, historyTaskId, item.id, {
+              status: "failed",
+              error: "未找到可下载清晰度",
+            }),
           );
           toast.error(`未找到可下载清晰度：${item.title}`);
           continue;
         }
+        if (batchRunIdRef.current !== runId) break;
         const taskId = await startVideoDownload(
           formatBatchItemTitle(idx, item.title || info.title),
           format,
           collectionDir,
         );
-        batchTaskIdsRef.current.add(taskId);
-        setBatchDownloadItems((items) =>
-          items.map((batchItem) =>
-            batchItem.id === item.id
-              ? {
-                  ...batchItem,
-                  taskId,
-                  status: "downloading",
-                  progress: 0,
-                  speed: 0,
-                }
-              : batchItem,
-          ),
+        setDownloadHistoryTasks((tasks) =>
+          updateBatchItem(tasks, historyTaskId, item.id, {
+            taskId,
+            status: "downloading",
+            progress: 0,
+            speed: 0,
+            filePath: undefined,
+          }),
         );
       } catch (error) {
         const message = extractErrorMessage(error);
-        setBatchDownloadItems((items) =>
-          items.map((batchItem) =>
-            batchItem.id === item.id
-              ? { ...batchItem, status: "failed", error: message }
-              : batchItem,
-          ),
+        setDownloadHistoryTasks((tasks) =>
+          updateBatchItem(tasks, historyTaskId, item.id, {
+            status: "failed",
+            error: message,
+          }),
         );
         toast.error(`${item.title}: ${message}`);
       }
     }
-  }, [ensureDownloadDirectory, selectedVideoItems, videoItems, videoTitle]);
 
-  const handleCancelDownload = useCallback(async () => {
-    if (!downloadTaskId) return;
-    try {
-      await cancelVideoDownload(downloadTaskId);
-    } catch (error) {
-      console.error("[Download] Failed to cancel:", error);
+    if (batchRunIdRef.current !== runId) {
+      setDownloadHistoryTasks((tasks) =>
+        cancelQueuedBatchItems(tasks, historyTaskId),
+      );
     }
-  }, [downloadTaskId]);
+  }, [
+    downloadHistoryTasks,
+    ensureDownloadDirectory,
+    selectedVideoItems,
+    videoItems,
+    videoTitle,
+  ]);
+
+  const handleCancelBatchDownloads = useCallback(
+    async (task: DownloadHistoryTask) => {
+      batchRunIdRef.current += 1;
+      const runningTaskIds = (task.items || [])
+        .filter((item) => item.taskId && item.status === "downloading")
+        .map((item) => item.taskId as string);
+
+      setDownloadHistoryTasks((tasks) => {
+        const now = Date.now();
+        return tasks.map((historyTask) => {
+          if (historyTask.id !== task.id || historyTask.type !== "batch") {
+            return historyTask;
+          }
+          const items = (historyTask.items || []).map((item) =>
+            ["queued", "parsing", "downloading"].includes(item.status)
+              ? {
+                  ...item,
+                  status: "cancelled" as BatchDownloadStatus,
+                  error: undefined,
+                }
+              : item,
+          );
+          return {
+            ...historyTask,
+            ...calculateBatchTaskState(items),
+            items,
+            updatedAt: now,
+          };
+        });
+      });
+
+      await Promise.allSettled(runningTaskIds.map(cancelVideoDownload));
+    },
+    [],
+  );
+
+  const handleRetryBatchItem = useCallback(
+    async (task: DownloadHistoryTask, item: BatchDownloadItem) => {
+      const dir = await ensureDownloadDirectory();
+      if (!dir) return;
+
+      const collectionTitle = task.title || videoTitle || "Bilibili批量下载";
+      const collectionDir = await join(
+        dir,
+        sanitizePathSegment(collectionTitle),
+      );
+
+      setDownloadHistoryTasks((tasks) =>
+        updateBatchItem(tasks, task.id, item.id, {
+          taskId: undefined,
+          status: "parsing",
+          progress: 0,
+          speed: 0,
+          error: undefined,
+          filePath: undefined,
+        }),
+      );
+
+      try {
+        const info = await parseVideo(item.url);
+        const format = info.formats[0];
+        if (!format) {
+          throw new Error("未找到可下载清晰度");
+        }
+        const taskId = await startVideoDownload(
+          formatBatchItemTitle(item.order, item.title || info.title),
+          format,
+          collectionDir,
+        );
+        setDownloadHistoryTasks((tasks) =>
+          updateBatchItem(tasks, task.id, item.id, {
+            taskId,
+            status: "downloading",
+            progress: 0,
+            speed: 0,
+            error: undefined,
+            filePath: undefined,
+          }),
+        );
+      } catch (error) {
+        const message = extractErrorMessage(error);
+        setDownloadHistoryTasks((tasks) =>
+          updateBatchItem(tasks, task.id, item.id, {
+            status: "failed",
+            error: message,
+          }),
+        );
+        toast.error(`${item.title}: ${message}`);
+      }
+    },
+    [ensureDownloadDirectory, videoTitle],
+  );
+
+  const handleClearDownloadHistory = useCallback(async () => {
+    if (activeDownloadCount > 0 || downloadTaskId) {
+      toast.error("仍有下载任务进行中，无法清空历史");
+      return;
+    }
+
+    setDownloadHistoryTasks([]);
+
+    try {
+      await clearDownloadHistory();
+    } catch (error) {
+      console.error("[DownloadHistory] Failed to clear:", error);
+      toast.error(extractErrorMessage(error) || "清空下载历史失败");
+    }
+  }, [activeDownloadCount, downloadTaskId]);
+
+  const handleOpenDownloadedFile = useCallback(async (filePath: string) => {
+    try {
+      await openDownloadFile(filePath);
+    } catch (error) {
+      toast.error(extractErrorMessage(error) || "播放文件失败");
+    }
+  }, []);
+
+  const handleRevealDownloadedFile = useCallback(async (filePath: string) => {
+    try {
+      await revealDownloadFile(filePath);
+    } catch (error) {
+      toast.error(extractErrorMessage(error) || "打开文件夹失败");
+    }
+  }, []);
 
   const handleBackToMain = useCallback(() => {
     setShowSettings(false);
@@ -1113,170 +1751,281 @@ function App() {
             showHistory ? "flex" : "hidden",
           )}
         >
-          {batchDownloadItems.length === 0 && !downloadTaskId && (
+          {hasDownloadTasks && (
+            <div className="flex items-center justify-end">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void handleClearDownloadHistory()}
+                disabled={activeDownloadCount > 0 || Boolean(downloadTaskId)}
+                className="h-8 px-3 text-xs text-muted-foreground"
+              >
+                清空记录
+              </Button>
+            </div>
+          )}
+
+          {!hasDownloadTasks && (
             <div className="rounded-xl border border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
               暂无下载任务
             </div>
           )}
 
-          {downloadTaskId && batchDownloadItems.length === 0 && (
-            <div className="rounded-xl border border-border bg-background p-4">
-              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{videoTitle}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    单视频 · 下载中
-                  </p>
-                </div>
-                <span className="text-sm tabular-nums text-muted-foreground">
-                  {downloadProgress}%
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleCancelDownload}
-                  className="h-8 px-3 text-xs"
-                >
-                  取消
-                </Button>
-              </div>
-              <div className="mt-3 flex items-center gap-2">
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all duration-300"
-                    style={{ width: `${downloadProgress}%` }}
-                  />
-                </div>
-                {downloadSpeed > 0 && (
-                  <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                    {(downloadSpeed / 1024 / 1024).toFixed(1)}MB/s
-                  </span>
-                )}
-              </div>
-              {downloadError && (
-                <p className="mt-2 text-xs text-destructive">{downloadError}</p>
-              )}
-            </div>
-          )}
+          {downloadHistoryTasks.map((task) => {
+            const items = task.items || [];
+            const completedCount = items.filter(
+              (item) => item.status === "completed",
+            ).length;
+            const failedCount = items.filter(
+              (item) => item.status === "failed",
+            ).length;
+            const cancelledCount = items.filter(
+              (item) => item.status === "cancelled",
+            ).length;
+            const isActive = ["queued", "parsing", "downloading"].includes(
+              task.status,
+            );
 
-          {batchDownloadItems.length > 0 && (
-            <div className="overflow-hidden rounded-xl border border-border bg-background">
-              <button
-                type="button"
-                onClick={() =>
-                  setIsBatchHistoryExpanded((expanded) => !expanded)
-                }
-                className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left hover:bg-muted/40"
+            return (
+              <div
+                key={task.id}
+                className="overflow-hidden rounded-xl border border-border bg-background"
               >
-                {isBatchHistoryExpanded ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                )}
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">
-                    {videoTitle || "Bilibili 批量下载"}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    批量任务 · 共 {batchDownloadItems.length} 个 · 完成{" "}
-                    {completedBatchCount} 个
-                    {failedBatchCount > 0
-                      ? ` · 失败 ${failedBatchCount} 个`
-                      : ""}
-                  </p>
-                </div>
-                <div className="flex min-w-32 flex-col items-end gap-1">
+                <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_92px_86px_auto] items-center gap-3 px-4 py-3 text-left max-[720px]:grid-cols-[auto_minmax(0,1fr)_auto]">
+                  {task.type === "batch" ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDownloadHistoryTasks((tasks) =>
+                          tasks.map((historyTask) =>
+                            historyTask.id === task.id
+                              ? {
+                                  ...historyTask,
+                                  expanded: !historyTask.expanded,
+                                  updatedAt: Date.now(),
+                                }
+                              : historyTask,
+                          ),
+                        )
+                      }
+                      className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted"
+                      title={task.expanded ? "收起" : "展开"}
+                    >
+                      {task.expanded ? (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </button>
+                  ) : (
+                    <span className="h-8 w-8" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{task.title}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {task.type === "batch"
+                        ? `批量任务 · 共 ${items.length} 个 · 完成 ${completedCount} 个`
+                        : "单视频"}
+                      {task.type === "batch" && failedCount > 0
+                        ? ` · 失败 ${failedCount} 个`
+                        : ""}
+                      {task.type === "batch" && cancelledCount > 0
+                        ? ` · 取消 ${cancelledCount} 个`
+                        : ""}
+                      {" · "}
+                      {VIDEO_SOURCES.find((source) => source.id === task.source)
+                        ?.label || "其他"}
+                    </p>
+                  </div>
                   <span
                     className={cn(
-                      "text-xs",
-                      batchStatus === "completed" && "text-emerald-600",
-                      batchStatus === "failed" && "text-destructive",
-                      ["queued", "downloading"].includes(batchStatus) &&
-                        "text-muted-foreground",
+                      "text-right text-xs max-[720px]:hidden",
+                      downloadStatusClass(task.status),
                     )}
                   >
-                    {batchStatusLabel(batchStatus)}
+                    {batchStatusLabel(task.status)}
                   </span>
-                  <div className="flex w-full items-center gap-2">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className={cn(
-                          "h-full rounded-full transition-all duration-300",
-                          batchStatus === "failed"
-                            ? "bg-destructive"
-                            : "bg-primary",
-                        )}
-                        style={{ width: `${batchOverallProgress}%` }}
-                      />
-                    </div>
-                    <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">
-                      {batchOverallProgress}%
+                  <span className="text-right text-xs tabular-nums text-muted-foreground max-[720px]:hidden">
+                    {formatDownloadSpeed(
+                      task.status === "downloading" ? task.speed : 0,
+                    )}
+                  </span>
+                  <div className="flex items-center justify-end gap-2">
+                    <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">
+                      {task.progress}%
                     </span>
+                    {isActive && task.type === "single" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void cancelVideoDownload(task.id)}
+                        className="h-8 px-3 text-xs"
+                      >
+                        取消
+                      </Button>
+                    )}
+                    {isActive && task.type === "batch" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleCancelBatchDownloads(task)}
+                        className="h-8 px-3 text-xs"
+                      >
+                        取消
+                      </Button>
+                    )}
+                    {task.type === "single" &&
+                      task.status === "completed" &&
+                      task.filePath && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              void handleOpenDownloadedFile(
+                                task.filePath as string,
+                              )
+                            }
+                            title="播放"
+                            className="h-8 w-8 p-0"
+                          >
+                            <Play className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              void handleRevealDownloadedFile(
+                                task.filePath as string,
+                              )
+                            }
+                            title="在文件夹中显示"
+                            className="h-8 w-8 p-0"
+                          >
+                            <FolderOpen className="h-3.5 w-3.5" />
+                          </Button>
+                        </>
+                      )}
                   </div>
                 </div>
-              </button>
-
-              {isBatchHistoryExpanded && (
-                <div className="border-t border-border bg-muted/10">
-                  {batchDownloadItems.map((item, index) => (
+                <div className="border-t border-border px-4 py-3">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
                     <div
-                      key={item.id}
-                      className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
-                    >
-                      <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                        {index + 1}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="min-w-0 flex-1 truncate text-sm">
-                            {item.title}
-                          </p>
-                          <span
-                            className={cn(
-                              "shrink-0 text-xs",
-                              item.status === "completed" && "text-emerald-600",
-                              item.status === "failed" && "text-destructive",
-                              ["queued", "parsing", "downloading"].includes(
-                                item.status,
-                              ) && "text-muted-foreground",
-                            )}
-                          >
-                            {batchStatusLabel(item.status)}
-                          </span>
-                        </div>
-                        <div className="mt-2 flex items-center gap-2">
-                          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                            <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-300",
+                        task.status === "failed"
+                          ? "bg-destructive"
+                          : "bg-primary",
+                      )}
+                      style={{ width: `${task.progress}%` }}
+                    />
+                  </div>
+                </div>
+                {task.error && (
+                  <p className="border-t border-border px-4 py-2 text-xs text-destructive">
+                    {task.error}
+                  </p>
+                )}
+                {task.type === "batch" && task.expanded && (
+                  <div className="border-t border-border bg-muted/10">
+                    {items.map((item, index) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+                      >
+                        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="min-w-0 flex-1 truncate text-sm">
+                              {item.title}
+                            </p>
+                            <span
                               className={cn(
-                                "h-full rounded-full transition-all duration-300",
-                                item.status === "failed"
-                                  ? "bg-destructive"
-                                  : "bg-primary",
+                                "shrink-0 text-xs",
+                                downloadStatusClass(item.status),
                               )}
-                              style={{ width: `${item.progress}%` }}
-                            />
-                          </div>
-                          <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                            {item.progress}%
-                          </span>
-                          {item.speed > 0 && (
-                            <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                              {(item.speed / 1024 / 1024).toFixed(1)}MB/s
+                            >
+                              {batchStatusLabel(item.status)}
                             </span>
+                            {["failed", "cancelled"].includes(item.status) && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() =>
+                                  void handleRetryBatchItem(task, item)
+                                }
+                                className="h-7 px-2 text-xs"
+                              >
+                                重试
+                              </Button>
+                            )}
+                            {item.status === "completed" && item.filePath && (
+                              <>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    void handleOpenDownloadedFile(
+                                      item.filePath as string,
+                                    )
+                                  }
+                                  title="播放"
+                                  className="h-7 w-7 p-0"
+                                >
+                                  <Play className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    void handleRevealDownloadedFile(
+                                      item.filePath as string,
+                                    )
+                                  }
+                                  title="在文件夹中显示"
+                                  className="h-7 w-7 p-0"
+                                >
+                                  <FolderOpen className="h-3.5 w-3.5" />
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                          <div className="mt-2 flex items-center gap-2">
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                              <div
+                                className={cn(
+                                  "h-full rounded-full transition-all duration-300",
+                                  item.status === "failed"
+                                    ? "bg-destructive"
+                                    : "bg-primary",
+                                )}
+                                style={{ width: `${item.progress}%` }}
+                              />
+                            </div>
+                            <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                              {item.progress}%
+                            </span>
+                            {item.speed > 0 && (
+                              <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                                {(item.speed / 1024 / 1024).toFixed(1)}MB/s
+                              </span>
+                            )}
+                          </div>
+                          {item.error && (
+                            <p className="mt-1 truncate text-xs text-destructive">
+                              {item.error}
+                            </p>
                           )}
                         </div>
-                        {item.error && (
-                          <p className="mt-1 truncate text-xs text-destructive">
-                            {item.error}
-                          </p>
-                        )}
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div

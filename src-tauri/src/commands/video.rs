@@ -2,10 +2,14 @@ use crate::video::bilibili;
 use crate::video::downloader::DownloadManager;
 use crate::video::m3u8;
 use crate::video::{parse_video_url, parse_video_url_with_curl, VideoFormat, VideoInfo};
+use crate::AppState;
 use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri::Manager;
+use tauri::State;
 use tauri_plugin_opener::OpenerExt;
+
+const DOWNLOAD_HISTORY_KEY: &str = "download_history_state";
 
 #[derive(Debug, serde::Serialize)]
 pub struct FfmpegStatus {
@@ -175,4 +179,62 @@ pub async fn cancel_video_download(app: AppHandle, task_id: String) -> Result<()
 
     let manager = app.state::<DownloadManager>();
     manager.cancel_download(&task_id).await
+}
+
+#[tauri::command]
+pub async fn get_download_history(
+    state: State<'_, AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    state
+        .db
+        .get_setting(DOWNLOAD_HISTORY_KEY)
+        .map_err(|e| e.to_string())?
+        .map(|value| serde_json::from_str(&value).map_err(|e| e.to_string()))
+        .transpose()
+}
+
+#[tauri::command]
+pub async fn save_download_history(
+    state: State<'_, AppState>,
+    history: serde_json::Value,
+) -> Result<(), String> {
+    let value = serde_json::to_string(&history).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting(DOWNLOAD_HISTORY_KEY, &value)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_download_history(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .db
+        .set_setting(DOWNLOAD_HISTORY_KEY, "{}")
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn open_download_file(app: AppHandle, file_path: String) -> Result<(), String> {
+    let path = PathBuf::from(file_path);
+    if !path.is_file() {
+        return Err("文件不存在".to_string());
+    }
+    let path = path
+        .to_str()
+        .ok_or_else(|| "文件路径包含无效字符".to_string())?
+        .to_string();
+    app.opener()
+        .open_path(path, None::<String>)
+        .map_err(|e| format!("打开文件失败: {e}"))
+}
+
+#[tauri::command]
+pub async fn reveal_download_file(app: AppHandle, file_path: String) -> Result<(), String> {
+    let path = PathBuf::from(file_path);
+    if !path.exists() {
+        return Err("文件不存在".to_string());
+    }
+    app.opener()
+        .reveal_item_in_dir(path)
+        .map_err(|e| format!("在文件夹中显示失败: {e}"))
 }

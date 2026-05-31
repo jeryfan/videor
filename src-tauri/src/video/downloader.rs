@@ -18,6 +18,7 @@ pub struct DownloadProgress {
     pub total: Option<u64>,
     pub speed: u64,
     pub status: DownloadStatus,
+    pub file_path: Option<String>,
 }
 
 /// 下载状态
@@ -105,6 +106,7 @@ impl DownloadManager {
                             total: None,
                             speed: 0,
                             status: DownloadStatus::Completed,
+                            file_path: final_path.to_str().map(str::to_string),
                         },
                     );
                 }
@@ -117,6 +119,7 @@ impl DownloadManager {
                             total: None,
                             speed: 0,
                             status: DownloadStatus::Failed(e),
+                            file_path: None,
                         },
                     );
                 }
@@ -342,6 +345,7 @@ async fn download_hls_concurrently(
                             total: Some(total_segments),
                             speed,
                             status: DownloadStatus::Downloading,
+                            file_path: None,
                         },
                     );
                     *report_at = now;
@@ -371,6 +375,7 @@ async fn download_hls_concurrently(
                 total: Some(total_segments),
                 speed: 0,
                 status: DownloadStatus::Cancelled,
+                file_path: None,
             },
         );
         return Err("下载已取消".to_string());
@@ -775,6 +780,7 @@ async fn download_stream(
                         total,
                         speed: 0,
                         status: DownloadStatus::Cancelled,
+                file_path: None,
                     },
                 );
                 return Err("下载已取消".to_string());
@@ -805,6 +811,7 @@ async fn download_stream(
                                     total,
                                     speed,
                                     status: DownloadStatus::Downloading,
+                            file_path: None,
                                 },
                             );
 

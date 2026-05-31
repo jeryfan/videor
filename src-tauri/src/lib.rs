@@ -97,7 +97,7 @@ fn handle_deeplink_url(
 
 #[cfg(target_os = "macos")]
 fn macos_tray_icon() -> Option<Image<'static>> {
-    const ICON_BYTES: &[u8] = include_bytes!("../icons/tray/macos/statusbar_template_3x.png");
+    const ICON_BYTES: &[u8] = include_bytes!("../icons/tray/macos/statusTemplate.png");
 
     match Image::from_bytes(ICON_BYTES) {
         Ok(icon) => Some(icon),
@@ -239,24 +239,24 @@ pub fn run() {
 
             let app_state = AppState::new(db);
 
-            
 
 
-            
 
-            
 
-            
 
-            
 
-            
 
-            
 
-            
 
-            
+
+
+
+
+
+
+
+
+
 
             // 迁移旧的 app_config_dir 配置到 Store
             if let Err(e) = app_store::migrate_app_config_dir_from_settings(app.handle()) {
@@ -336,7 +336,7 @@ pub fn run() {
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
                 .tooltip("Videor") // 鼠标悬停提示
                 .on_tray_icon_event(|_tray, event| match event {
-                    
+
                     _ => log::debug!("unhandled event {event:?}"),
                 })
                 .menu(&menu)
@@ -368,7 +368,7 @@ pub fn run() {
             }
 
             let _tray = tray_builder.build(app)?;
-            
+
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
 
@@ -411,7 +411,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
 
-                
+
 
                 // Periodic backup check (on startup)
                 if let Err(e) = state.db.periodic_backup_if_needed() {
@@ -434,7 +434,7 @@ pub fn run() {
                     }
                 });
 
-                
+
             });
 
             // Linux: 禁用 WebKitGTK 硬件加速，防止 EGL 初始化失败导致白屏
@@ -519,6 +519,11 @@ pub fn run() {
             // Video downloader
             commands::start_video_download,
             commands::cancel_video_download,
+            commands::get_download_history,
+            commands::save_download_history,
+            commands::clear_download_history,
+            commands::open_download_file,
+            commands::reveal_download_file,
         ]);
 
     let app = builder

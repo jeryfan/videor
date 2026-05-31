@@ -1,6 +1,6 @@
 {
   "name": "videor",
-  "version": "3.16.0",
+  "version": "0.1.0",
   "description": "Videor - Desktop utility application",
   "type": "module",
   "scripts": {

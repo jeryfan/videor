@@ -8,6 +8,7 @@ export interface DownloadProgress {
   total: number | null;
   speed: number;
   status: "downloading" | "completed" | "failed" | "cancelled";
+  file_path?: string | null;
 }
 
 export type DownloadStatus = DownloadProgress["status"];
@@ -22,6 +23,15 @@ export interface DownloadTask {
   error?: string;
 }
 
+export interface DownloadHistoryState {
+  tasks?: unknown[];
+  singleDownloadTask?: unknown;
+  batchDownloadTitle?: string;
+  batchDownloadItems?: unknown[];
+  isBatchHistoryExpanded?: boolean;
+  updatedAt?: number;
+}
+
 /**
  * 开始下载视频
  * @param title 视频标题（用于文件名）
@@ -32,7 +42,7 @@ export interface DownloadTask {
 export async function startVideoDownload(
   title: string,
   format: VideoFormat,
-  saveDir: string
+  saveDir: string,
 ): Promise<string> {
   return await invoke<string>("start_video_download", {
     title,
@@ -49,13 +59,35 @@ export async function cancelVideoDownload(taskId: string): Promise<void> {
   return await invoke("cancel_video_download", { taskId });
 }
 
+export async function getDownloadHistory(): Promise<DownloadHistoryState | null> {
+  return await invoke<DownloadHistoryState | null>("get_download_history");
+}
+
+export async function saveDownloadHistory(
+  history: DownloadHistoryState,
+): Promise<void> {
+  return await invoke("save_download_history", { history });
+}
+
+export async function clearDownloadHistory(): Promise<void> {
+  return await invoke("clear_download_history");
+}
+
+export async function openDownloadFile(filePath: string): Promise<void> {
+  return await invoke("open_download_file", { filePath });
+}
+
+export async function revealDownloadFile(filePath: string): Promise<void> {
+  return await invoke("reveal_download_file", { filePath });
+}
+
 /**
  * 监听下载进度事件
  * @param callback 进度回调
  * @returns 取消监听的函数
  */
 export async function listenDownloadProgress(
-  callback: (progress: DownloadProgress) => void
+  callback: (progress: DownloadProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<DownloadProgress>("video-download-progress", (event) => {
     callback(event.payload);
