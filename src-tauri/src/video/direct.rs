@@ -1,4 +1,4 @@
-use super::{VideoFormat, VideoInfo, VideoParser};
+use super::{VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser};
 
 pub struct DirectParser;
 
@@ -28,9 +28,15 @@ impl VideoParser for DirectParser {
             formats: vec![VideoFormat {
                 quality: "original".to_string(),
                 url: url.to_string(),
+                preview_url: None,
                 audio_url: None,
                 size: None,
             }],
+            kind: VideoKind::Video,
+            items: Vec::<VideoItem>::new(),
+            login_required: false,
+            message: None,
+            uploader: None,
         })
     }
 }

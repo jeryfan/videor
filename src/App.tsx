@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -16,11 +16,24 @@ import {
   Link2,
   Download,
   Loader2,
+  UserRound,
+  LogOut,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { join } from "@tauri-apps/api/path";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   isWindows,
@@ -32,7 +45,15 @@ import { useSettingsQuery } from "@/lib/query";
 import { settingsApi } from "@/lib/api";
 import type { Settings as AppSettings } from "@/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
-import { parseVideo, type VideoFormat } from "@/lib/api/videoParser";
+import {
+  parseVideo,
+  generateBilibiliLoginQr,
+  getBilibiliLoginStatus,
+  logoutBilibili,
+  pollBilibiliLoginQr,
+  type BilibiliLoginStatus,
+  type VideoFormat,
+} from "@/lib/api/videoParser";
 import {
   startVideoDownload,
   cancelVideoDownload,
@@ -45,6 +66,23 @@ const HEADER_HEIGHT = 64; // px
 const VIDEO_SOURCE_STORAGE_KEY = "videor-active-source";
 
 type VideoSource = "douyin" | "bilibili" | "m3u8" | "other";
+type BatchDownloadStatus =
+  | "queued"
+  | "parsing"
+  | "downloading"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+interface BatchDownloadItem {
+  id: string;
+  title: string;
+  taskId?: string;
+  status: BatchDownloadStatus;
+  progress: number;
+  speed: number;
+  error?: string;
+}
 
 const VIDEO_SOURCES: Array<{
   id: VideoSource;
@@ -66,6 +104,38 @@ const getInitialVideoSource = (): VideoSource => {
   }
   return "douyin";
 };
+
+function sanitizePathSegment(value: string): string {
+  return (
+    value
+      .replace(/[\\/:*?"<>|]/g, "_")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120) || "Bilibili合集"
+  );
+}
+
+function formatBatchItemTitle(index: number, title: string): string {
+  const prefix = String(index + 1).padStart(2, "0");
+  return `${prefix}.${sanitizePathSegment(title || "Bilibili视频")}`;
+}
+
+function batchStatusLabel(status: BatchDownloadStatus): string {
+  switch (status) {
+    case "queued":
+      return "等待";
+    case "parsing":
+      return "解析中";
+    case "downloading":
+      return "下载中";
+    case "completed":
+      return "完成";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+  }
+}
 
 function SourceSwitcher({
   activeSource,
@@ -123,6 +193,19 @@ function App() {
 
   const [videoCover, setVideoCover] = useState("");
   const [videoPlatform, setVideoPlatform] = useState("");
+  const [videoItems, setVideoItems] = useState<
+    NonNullable<Awaited<ReturnType<typeof parseVideo>>["items"]>
+  >([]);
+  const [videoKind, setVideoKind] = useState("video");
+  const [videoMessage, setVideoMessage] = useState("");
+  const [videoLoginRequired, setVideoLoginRequired] = useState(false);
+  const [selectedVideoItems, setSelectedVideoItems] = useState<string[]>([]);
+  const [bilibiliStatus, setBilibiliStatus] =
+    useState<BilibiliLoginStatus | null>(null);
+  const [isBilibiliLoginOpen, setIsBilibiliLoginOpen] = useState(false);
+  const [bilibiliQrKey, setBilibiliQrKey] = useState("");
+  const [bilibiliQrImage, setBilibiliQrImage] = useState("");
+  const [bilibiliLoginMessage, setBilibiliLoginMessage] = useState("");
   const [parseStatus, setParseStatus] = useState<
     "idle" | "parsing" | "success" | "error"
   >("idle");
@@ -132,6 +215,11 @@ function App() {
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadSpeed, setDownloadSpeed] = useState(0);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [batchDownloadItems, setBatchDownloadItems] = useState<
+    BatchDownloadItem[]
+  >([]);
+  const [isBatchHistoryExpanded, setIsBatchHistoryExpanded] = useState(false);
+  const batchTaskIdsRef = useRef<Set<string>>(new Set());
 
   const { data: settingsData } = useSettingsQuery();
   const useAppWindowControls =
@@ -146,6 +234,14 @@ function App() {
         : videoPlatform
           ? "直链"
           : "";
+  const previewVideoUrl =
+    videoPlatform === "bilibili" && videoFormats[selectedFormatIdx]?.preview_url
+      ? videoFormats[selectedFormatIdx].preview_url
+      : videoPlatform === "bilibili" && videoFormats[selectedFormatIdx]?.url
+      ? `videor-stream://localhost/video?url=${encodeURIComponent(
+          videoFormats[selectedFormatIdx].url,
+        )}`
+      : videoFormats[selectedFormatIdx]?.url;
   const downloadPlaceholder =
     activeSource === "douyin"
       ? "粘贴抖音视频链接，按 Enter 开始解析..."
@@ -154,6 +250,32 @@ function App() {
         : activeSource === "m3u8"
           ? "粘贴 M3U8 播放列表链接，按 Enter 开始解析..."
           : "粘贴视频链接，按 Enter 开始解析...";
+  const activeBatchCount = batchDownloadItems.filter((item) =>
+    ["queued", "parsing", "downloading"].includes(item.status),
+  ).length;
+  const completedBatchCount = batchDownloadItems.filter(
+    (item) => item.status === "completed",
+  ).length;
+  const failedBatchCount = batchDownloadItems.filter(
+    (item) => item.status === "failed",
+  ).length;
+  const batchOverallProgress =
+    batchDownloadItems.length > 0
+      ? Math.round(
+          batchDownloadItems.reduce((sum, item) => sum + item.progress, 0) /
+            batchDownloadItems.length,
+        )
+      : 0;
+  const batchStatus =
+    batchDownloadItems.length === 0
+      ? "queued"
+      : failedBatchCount > 0 && activeBatchCount === 0
+        ? "failed"
+        : completedBatchCount === batchDownloadItems.length
+          ? "completed"
+          : activeBatchCount > 0
+            ? "downloading"
+            : "queued";
 
   useEffect(() => {
     let active = true;
@@ -196,6 +318,78 @@ function App() {
     };
     void syncWindowDecorations();
   }, [useAppWindowControls, settingsData]);
+
+  const refreshBilibiliStatus = useCallback(async () => {
+    try {
+      setBilibiliStatus(await getBilibiliLoginStatus());
+    } catch (error) {
+      console.warn("[Bilibili] Failed to refresh login status", error);
+      setBilibiliStatus({
+        logged_in: false,
+        message: extractErrorMessage(error),
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSource === "bilibili") {
+      void refreshBilibiliStatus();
+    }
+  }, [activeSource, refreshBilibiliStatus]);
+
+  useEffect(() => {
+    if (!isBilibiliLoginOpen || !bilibiliQrKey) return;
+
+    let active = true;
+    const interval = window.setInterval(() => {
+      void (async () => {
+        try {
+          const result = await pollBilibiliLoginQr(bilibiliQrKey);
+          if (!active) return;
+          setBilibiliLoginMessage(result.message);
+          if (result.status === "confirmed") {
+            window.clearInterval(interval);
+            setIsBilibiliLoginOpen(false);
+            await refreshBilibiliStatus();
+            toast.success("Bilibili 登录成功");
+          }
+        } catch (error) {
+          if (!active) return;
+          setBilibiliLoginMessage(extractErrorMessage(error));
+        }
+      })();
+    }, 2500);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [bilibiliQrKey, isBilibiliLoginOpen, refreshBilibiliStatus]);
+
+  const handleOpenBilibiliLogin = useCallback(async () => {
+    try {
+      setBilibiliLoginMessage("正在生成二维码...");
+      setBilibiliQrImage("");
+      setBilibiliQrKey("");
+      setIsBilibiliLoginOpen(true);
+      const qr = await generateBilibiliLoginQr();
+      setBilibiliQrKey(qr.qrcode_key);
+      setBilibiliQrImage(qr.svg);
+      setBilibiliLoginMessage("请使用 Bilibili App 扫码登录");
+    } catch (error) {
+      setBilibiliLoginMessage(extractErrorMessage(error));
+    }
+  }, []);
+
+  const handleBilibiliLogout = useCallback(async () => {
+    try {
+      await logoutBilibili();
+      await refreshBilibiliStatus();
+      toast.info("已退出 Bilibili 登录");
+    } catch (error) {
+      toast.error(extractErrorMessage(error));
+    }
+  }, [refreshBilibiliStatus]);
 
   const notifyWindowControlError = (error: unknown) => {
     toast.error(
@@ -250,6 +444,14 @@ function App() {
 
     setVideoCover("");
     setVideoPlatform("");
+    setVideoItems([]);
+    setVideoKind("video");
+    setVideoMessage("");
+    setVideoLoginRequired(false);
+    setSelectedVideoItems([]);
+    setBatchDownloadItems([]);
+    setIsBatchHistoryExpanded(false);
+    batchTaskIdsRef.current.clear();
 
     try {
       const info = await parseVideo(rawInput);
@@ -257,6 +459,11 @@ function App() {
       setVideoTitle(info.title);
       setVideoCover(info.cover_url || "");
       setVideoPlatform(info.platform);
+      setVideoItems(info.items || []);
+      setVideoKind(info.kind || "video");
+      setVideoMessage(info.message || "");
+      setVideoLoginRequired(Boolean(info.login_required));
+      setSelectedVideoItems((info.items || []).map((item) => item.id));
       setParseStatus("success");
     } catch (error) {
       console.error("[VideoParser] Failed to parse:", error);
@@ -271,6 +478,37 @@ function App() {
 
     const setup = async () => {
       unlisten = await listenDownloadProgress((progress) => {
+        if (batchTaskIdsRef.current.has(progress.task_id)) {
+          setBatchDownloadItems((items) =>
+            items.map((item) => {
+              if (item.taskId !== progress.task_id) return item;
+
+              const percent =
+                progress.total && progress.total > 0
+                  ? Math.round((progress.downloaded / progress.total) * 100)
+                  : item.progress;
+              const nextStatus =
+                progress.status === "completed"
+                  ? "completed"
+                  : progress.status === "failed"
+                    ? "failed"
+                    : progress.status === "cancelled"
+                      ? "cancelled"
+                      : "downloading";
+
+              return {
+                ...item,
+                status: nextStatus,
+                progress: nextStatus === "completed" ? 100 : percent,
+                speed: progress.speed,
+                error:
+                  progress.status === "failed" ? "下载失败" : item.error,
+              };
+            }),
+          );
+          return;
+        }
+
         setDownloadProgress(
           progress.total && progress.total > 0
             ? Math.round((progress.downloaded / progress.total) * 100)
@@ -338,6 +576,123 @@ function App() {
       toast.error(extractErrorMessage(error) || "启动下载失败");
     }
   }, [videoFormats, videoTitle, selectedFormatIdx, settingsData]);
+
+  const ensureDownloadDirectory = useCallback(async () => {
+    let dir: string | null = settingsData?.downloadDirectory ?? null;
+    if (!dir) {
+      dir = await invoke<string | null>("pick_directory", {});
+      if (!dir) {
+        toast.info("未选择保存目录");
+        return null;
+      }
+      try {
+        await settingsApi.save({
+          ...settingsData,
+          downloadDirectory: dir,
+        } as AppSettings);
+      } catch (e) {
+        console.warn("[Download] Failed to save default directory:", e);
+      }
+    }
+    return dir;
+  }, [settingsData]);
+
+  const handleStartBilibiliBatchDownload = useCallback(async () => {
+    const selectedItems = videoItems.filter((item) =>
+      selectedVideoItems.includes(item.id),
+    );
+    if (selectedItems.length === 0) {
+      toast.error("请选择要下载的视频");
+      return;
+    }
+
+    const dir = await ensureDownloadDirectory();
+    if (!dir) return;
+
+    const collectionDir = await join(dir, sanitizePathSegment(videoTitle));
+    batchTaskIdsRef.current.clear();
+    setIsBatchHistoryExpanded(true);
+    setBatchDownloadItems(
+      selectedItems.map((item) => ({
+        id: item.id,
+        title: item.title,
+        status: "queued",
+        progress: 0,
+        speed: 0,
+      })),
+    );
+    toast.info(
+      `已开始批量解析 ${selectedItems.length} 个 Bilibili 视频，保存到合集目录`,
+    );
+
+    for (const [idx, item] of selectedItems.entries()) {
+      try {
+        // 保守节奏：逐条解析并启动，避免短时间大量请求 B 站接口。
+        if (idx > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1500));
+        }
+        setBatchDownloadItems((items) =>
+          items.map((batchItem) =>
+            batchItem.id === item.id
+              ? { ...batchItem, status: "parsing", error: undefined }
+              : batchItem,
+          ),
+        );
+        const info = await parseVideo(item.url);
+        const format = info.formats[selectedFormatIdx] || info.formats[0];
+        if (!format) {
+          setBatchDownloadItems((items) =>
+            items.map((batchItem) =>
+              batchItem.id === item.id
+                ? {
+                    ...batchItem,
+                    status: "failed",
+                    error: "未找到可下载清晰度",
+                  }
+                : batchItem,
+            ),
+          );
+          toast.error(`未找到可下载清晰度：${item.title}`);
+          continue;
+        }
+        const taskId = await startVideoDownload(
+          formatBatchItemTitle(idx, item.title || info.title),
+          format,
+          collectionDir,
+        );
+        batchTaskIdsRef.current.add(taskId);
+        setBatchDownloadItems((items) =>
+          items.map((batchItem) =>
+            batchItem.id === item.id
+              ? {
+                  ...batchItem,
+                  taskId,
+                  status: "downloading",
+                  progress: 0,
+                  speed: 0,
+                }
+              : batchItem,
+          ),
+        );
+      } catch (error) {
+        const message = extractErrorMessage(error);
+        setBatchDownloadItems((items) =>
+          items.map((batchItem) =>
+            batchItem.id === item.id
+              ? { ...batchItem, status: "failed", error: message }
+              : batchItem,
+          ),
+        );
+        toast.error(`${item.title}: ${message}`);
+      }
+    }
+  }, [
+    ensureDownloadDirectory,
+    selectedFormatIdx,
+    selectedVideoItems,
+    videoItems,
+    videoTitle,
+  ]);
 
   const handleCancelDownload = useCallback(async () => {
     if (!downloadTaskId) return;
@@ -410,6 +765,41 @@ function App() {
         </div>
       )}
 
+      <Dialog open={isBilibiliLoginOpen} onOpenChange={setIsBilibiliLoginOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Bilibili 登录</DialogTitle>
+            <DialogDescription>
+              登录信息只保存在本机，用于访问你账号有权限观看的内容。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-4 px-6 py-5">
+            <div className="flex h-56 w-56 items-center justify-center rounded-lg border border-border bg-white p-3">
+              {bilibiliQrImage ? (
+                <img
+                  src={bilibiliQrImage}
+                  alt="Bilibili 登录二维码"
+                  className="h-full w-full"
+                />
+              ) : (
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              )}
+            </div>
+            <p className="text-center text-sm text-muted-foreground">
+              {bilibiliLoginMessage || "等待二维码"}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsBilibiliLoginOpen(false)}>
+              取消
+            </Button>
+            <Button variant="secondary" onClick={() => void handleOpenBilibiliLogin()}>
+              刷新二维码
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <header
         className="fixed z-50 w-full transition-all duration-300 bg-background/80 backdrop-blur-md"
         {...DRAG_REGION_ATTR}
@@ -479,7 +869,40 @@ function App() {
             className="flex items-center gap-2 justify-self-end"
             style={{ WebkitAppRegion: "no-drag" } as any}
           >
-            {!showSettings && (
+            {!showSettings && !showHistory && activeSource === "bilibili" && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    bilibiliStatus?.logged_in
+                      ? void handleBilibiliLogout()
+                      : void handleOpenBilibiliLogin()
+                  }
+                  title={
+                    bilibiliStatus?.logged_in
+                      ? `Bilibili: ${bilibiliStatus.username || "已登录"}`
+                      : "扫码登录 Bilibili"
+                  }
+                  className={cn(
+                    "h-8 gap-1.5 px-2 hover:bg-black/5 dark:hover:bg-white/5",
+                    bilibiliStatus?.logged_in && "text-emerald-600",
+                  )}
+                >
+                  {bilibiliStatus?.logged_in ? (
+                    <LogOut className="h-4 w-4" />
+                  ) : (
+                    <UserRound className="h-4 w-4" />
+                  )}
+                  <span className="hidden text-xs lg:inline">
+                    {bilibiliStatus?.logged_in
+                      ? bilibiliStatus.username || "已登录"
+                      : "登录"}
+                  </span>
+                </Button>
+              </div>
+            )}
+            {!showSettings && !showHistory && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -505,7 +928,176 @@ function App() {
             defaultTab="general"
           />
         ) : showHistory ? (
-          <div className="flex flex-col h-full" />
+          <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 py-4">
+            {batchDownloadItems.length === 0 && !downloadTaskId && (
+              <div className="rounded-xl border border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+                暂无下载任务
+              </div>
+            )}
+
+            {downloadTaskId && batchDownloadItems.length === 0 && (
+              <div className="rounded-xl border border-border bg-background p-4">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{videoTitle}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      单视频 · 下载中
+                    </p>
+                  </div>
+                  <span className="text-sm tabular-nums text-muted-foreground">
+                    {downloadProgress}%
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancelDownload}
+                    className="h-8 px-3 text-xs"
+                  >
+                    取消
+                  </Button>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-300"
+                      style={{ width: `${downloadProgress}%` }}
+                    />
+                  </div>
+                  {downloadSpeed > 0 && (
+                    <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                      {(downloadSpeed / 1024 / 1024).toFixed(1)}MB/s
+                    </span>
+                  )}
+                </div>
+                {downloadError && (
+                  <p className="mt-2 text-xs text-destructive">
+                    {downloadError}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {batchDownloadItems.length > 0 && (
+              <div className="overflow-hidden rounded-xl border border-border bg-background">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setIsBatchHistoryExpanded((expanded) => !expanded)
+                  }
+                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left hover:bg-muted/40"
+                >
+                  {isBatchHistoryExpanded ? (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">
+                      {videoTitle || "Bilibili 批量下载"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      批量任务 · 共 {batchDownloadItems.length} 个 · 完成{" "}
+                      {completedBatchCount} 个
+                      {failedBatchCount > 0
+                        ? ` · 失败 ${failedBatchCount} 个`
+                        : ""}
+                    </p>
+                  </div>
+                  <div className="flex min-w-32 flex-col items-end gap-1">
+                    <span
+                      className={cn(
+                        "text-xs",
+                        batchStatus === "completed" && "text-emerald-600",
+                        batchStatus === "failed" && "text-destructive",
+                        ["queued", "downloading"].includes(batchStatus) &&
+                          "text-muted-foreground",
+                      )}
+                    >
+                      {batchStatusLabel(batchStatus)}
+                    </span>
+                    <div className="flex w-full items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all duration-300",
+                            batchStatus === "failed"
+                              ? "bg-destructive"
+                              : "bg-primary",
+                          )}
+                          style={{ width: `${batchOverallProgress}%` }}
+                        />
+                      </div>
+                      <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">
+                        {batchOverallProgress}%
+                      </span>
+                    </div>
+                  </div>
+                </button>
+
+                {isBatchHistoryExpanded && (
+                  <div className="border-t border-border bg-muted/10">
+                    {batchDownloadItems.map((item, index) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+                      >
+                        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="min-w-0 flex-1 truncate text-sm">
+                              {item.title}
+                            </p>
+                            <span
+                              className={cn(
+                                "shrink-0 text-xs",
+                                item.status === "completed" &&
+                                  "text-emerald-600",
+                                item.status === "failed" &&
+                                  "text-destructive",
+                                ["queued", "parsing", "downloading"].includes(
+                                  item.status,
+                                ) && "text-muted-foreground",
+                              )}
+                            >
+                              {batchStatusLabel(item.status)}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex items-center gap-2">
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                              <div
+                                className={cn(
+                                  "h-full rounded-full transition-all duration-300",
+                                  item.status === "failed"
+                                    ? "bg-destructive"
+                                    : "bg-primary",
+                                )}
+                                style={{ width: `${item.progress}%` }}
+                              />
+                            </div>
+                            <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                              {item.progress}%
+                            </span>
+                            {item.speed > 0 && (
+                              <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                                {(item.speed / 1024 / 1024).toFixed(1)}MB/s
+                              </span>
+                            )}
+                          </div>
+                          {item.error && (
+                            <p className="mt-1 truncate text-xs text-destructive">
+                              {item.error}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex flex-col items-center flex-1">
             <div className="w-full max-w-4xl">
@@ -535,14 +1127,127 @@ function App() {
                 </div>
               )}
 
+              {parseStatus === "success" &&
+                activeSource === "bilibili" &&
+                (videoLoginRequired || videoMessage) &&
+                videoFormats.length === 0 && (
+                  <div className="mt-3 rounded-xl border border-border bg-muted/30 p-4 animate-fade-in">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground">
+                          {videoKind === "charging_collection"
+                            ? "Bilibili 权限内容"
+                            : "Bilibili"}
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {videoMessage ||
+                            "该内容需要登录后检查账号是否拥有观看权限。"}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => void handleOpenBilibiliLogin()}
+                        className="shrink-0"
+                      >
+                        扫码登录
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+              {parseStatus === "success" &&
+                activeSource === "bilibili" &&
+                videoItems.length > 0 && (
+                  <div className="mt-3 animate-fade-in space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {videoTitle}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {videoKind === "multipart"
+                            ? `多 P 视频 · ${videoItems.length} 个分集`
+                            : `合集 · ${videoItems.length} 个视频`}
+                          {bilibiliStatus?.logged_in
+                            ? ` · 已登录 ${bilibiliStatus.username || ""}`
+                            : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setSelectedVideoItems(
+                              selectedVideoItems.length === videoItems.length
+                                ? []
+                                : videoItems.map((item) => item.id),
+                            )
+                          }
+                        >
+                          {selectedVideoItems.length === videoItems.length
+                            ? "取消全选"
+                            : "全选"}
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => void handleStartBilibiliBatchDownload()}
+                          disabled={
+                            selectedVideoItems.length === 0 ||
+                            activeBatchCount > 0
+                          }
+                        >
+                          {activeBatchCount > 0 ? "下载中" : "批量下载"}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="max-h-[calc(100vh-280px)] overflow-y-auto rounded-xl border border-border">
+                      {videoItems.map((item, index) => {
+                        const checked = selectedVideoItems.includes(item.id);
+                        return (
+                          <label
+                            key={item.id}
+                            className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/40"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => {
+                                setSelectedVideoItems((prev) =>
+                                  event.target.checked
+                                    ? Array.from(new Set([...prev, item.id]))
+                                    : prev.filter((id) => id !== item.id),
+                                );
+                              }}
+                              className="h-4 w-4"
+                            />
+                            <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                              {index + 1}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-sm">
+                              {item.title}
+                            </span>
+                            {item.duration ? (
+                              <span className="shrink-0 text-xs text-muted-foreground">
+                                {Math.floor(item.duration / 60)}:
+                                {String(item.duration % 60).padStart(2, "0")}
+                              </span>
+                            ) : null}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
               {/* 视频预览 */}
               {parseStatus === "success" && videoFormats.length > 0 && (
                 <div className="animate-fade-in space-y-3">
                   {/* 视频容器：悬浮时显示下载按钮 */}
                   <div className="relative group flex w-full justify-center overflow-hidden rounded-xl bg-black">
                     <video
-                      key={selectedFormatIdx}
-                      src={videoFormats[selectedFormatIdx]?.url}
+                      key={`${selectedFormatIdx}-${previewVideoUrl}`}
+                      src={previewVideoUrl}
                       controls
                       poster={videoCover || undefined}
                       className="h-auto max-h-[calc(100vh-220px)] w-full rounded-xl object-contain"
@@ -550,36 +1255,14 @@ function App() {
                     {/* 悬浮下载按钮 / 进度 */}
                     <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-end gap-2">
                       {downloadTaskId ? (
-                        <div className="flex items-center gap-2 bg-black/70 backdrop-blur-sm rounded-lg px-3 py-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleCancelDownload}
-                            className="h-7 text-white hover:text-white hover:bg-white/20 gap-1.5 text-xs px-2"
-                          >
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            取消
-                          </Button>
-                          {downloadProgress > 0 && (
-                            <div className="w-24">
-                              <div className="h-1 bg-white/30 rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-white rounded-full transition-all duration-200"
-                                  style={{ width: `${downloadProgress}%` }}
-                                />
-                              </div>
-                              <div className="flex justify-between text-[10px] text-white/80 mt-0.5">
-                                <span>{downloadProgress}%</span>
-                                {downloadSpeed > 0 && (
-                                  <span>
-                                    {(downloadSpeed / 1024 / 1024).toFixed(1)}{" "}
-                                    MB/s
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                        <Button
+                          size="sm"
+                          disabled
+                          className="bg-black/70 backdrop-blur-sm text-white border-0 gap-1.5 shadow-lg disabled:opacity-100"
+                        >
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          下载中
+                        </Button>
                       ) : (
                         <Button
                           size="sm"

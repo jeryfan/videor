@@ -154,6 +154,11 @@ pub fn run() {
     }
 
     let builder = builder
+        .register_asynchronous_uri_scheme_protocol("videor-stream", |_ctx, request, responder| {
+            tauri::async_runtime::spawn(async move {
+                responder.respond(crate::video::stream_proxy::build_stream_response(request).await);
+            });
+        })
         // 注册 deep-link 插件（处理 macOS AppleEvent 和其他平台的深链接）
         .plugin(tauri_plugin_deep_link::init())
         // 拦截窗口关闭：根据设置决定是否最小化到托盘
@@ -500,6 +505,10 @@ pub fn run() {
             commands::scan_local_proxies,
             // Video parser
             commands::parse_video,
+            commands::bilibili_login_qr_generate,
+            commands::bilibili_login_qr_poll,
+            commands::bilibili_login_status,
+            commands::bilibili_logout,
             // Video downloader
             commands::start_video_download,
             commands::cancel_video_download,

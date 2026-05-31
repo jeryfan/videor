@@ -2,6 +2,7 @@ pub mod bilibili;
 pub mod direct;
 pub mod douyin;
 pub mod downloader;
+pub mod stream_proxy;
 
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,16 @@ pub struct VideoInfo {
     pub duration: Option<u64>,
     pub platform: String,
     pub formats: Vec<VideoFormat>,
+    #[serde(default)]
+    pub kind: VideoKind,
+    #[serde(default)]
+    pub items: Vec<VideoItem>,
+    #[serde(default)]
+    pub login_required: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
+    pub uploader: Option<String>,
 }
 
 /// 视频格式/清晰度
@@ -20,8 +31,32 @@ pub struct VideoInfo {
 pub struct VideoFormat {
     pub quality: String,
     pub url: String,
+    #[serde(default)]
+    pub preview_url: Option<String>,
     pub audio_url: Option<String>,
     pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoKind {
+    #[default]
+    Video,
+    Multipart,
+    Collection,
+    ChargingCollection,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoItem {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub bvid: Option<String>,
+    pub cid: Option<u64>,
+    pub page: Option<u64>,
+    pub duration: Option<u64>,
+    pub cover_url: Option<String>,
 }
 
 #[async_trait::async_trait]
