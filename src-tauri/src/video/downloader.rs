@@ -1,11 +1,12 @@
 use super::{hash_map_to_header_map, VideoFormat};
-use futures_util::StreamExt;
+use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use futures_util::{stream, StreamExt};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -150,7 +151,11 @@ async fn do_download(
         .map_err(|e| e.to_string())?;
 
     if is_m3u8_url(&format.url) {
-        download_hls_with_ffmpeg(app, task_id, format, save_path, cancel_token).await?;
+        let concurrency = crate::settings::get_settings()
+            .m3u8_concurrency
+            .clamp(1, 16) as usize;
+        download_hls_concurrently(app, task_id, format, save_path, cancel_token, concurrency)
+            .await?;
     } else if let Some(audio_url) = &format.audio_url {
         // DASH 格式：分别下载视频和音频，然后合并
         let video_tmp = save_path.with_extension("video.tmp");
@@ -230,6 +235,483 @@ async fn do_download(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct HlsSegment {
+    index: usize,
+    url: String,
+    key: Option<HlsKey>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+struct HlsKey {
+    uri: String,
+    iv: [u8; 16],
+}
+
+#[derive(Debug, Clone)]
+struct HlsPlaylist {
+    segments: Vec<HlsSegment>,
+    init_map_url: Option<String>,
+}
+
+async fn download_hls_concurrently(
+    app: &AppHandle,
+    task_id: &str,
+    format: &VideoFormat,
+    save_path: &PathBuf,
+    cancel_token: &CancellationToken,
+    concurrency: usize,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let playlist = resolve_hls_media_playlist(&client, &format.url, &format.headers).await?;
+    let parsed = parse_hls_segments(&playlist.url, &playlist.text)?;
+    let segments = parsed.segments;
+    if segments.is_empty() {
+        return Err("M3U8 播放列表没有可下载分片".to_string());
+    }
+    let key_map = Arc::new(fetch_hls_keys(&client, &segments, &format.headers).await?);
+
+    let temp_dir = save_path.with_extension(format!(
+        "hls-{}",
+        uuid::Uuid::new_v4().to_string().replace('-', "")
+    ));
+    tokio::fs::create_dir_all(&temp_dir)
+        .await
+        .map_err(|e| format!("创建 M3U8 临时目录失败: {e}"))?;
+
+    let total_segments = segments.len() as u64;
+    let completed = Arc::new(tokio::sync::Mutex::new((0_u64, 0_u64)));
+    let last_report = Arc::new(tokio::sync::Mutex::new(tokio::time::Instant::now()));
+    let started_at = tokio::time::Instant::now();
+    let app_clone = app.clone();
+    let task_id_string = task_id.to_string();
+
+    let results = stream::iter(segments.iter().cloned())
+        .map(|segment| {
+            let client = client.clone();
+            let headers = format.headers.clone();
+            let key_map = key_map.clone();
+            let temp_dir = temp_dir.clone();
+            let cancel_token = cancel_token.clone();
+            let completed = completed.clone();
+            let last_report = last_report.clone();
+            let app = app_clone.clone();
+            let task_id = task_id_string.clone();
+            async move {
+                let bytes =
+                    download_hls_segment(&client, &segment.url, &headers, &cancel_token).await?;
+                let bytes = if let Some(key) = &segment.key {
+                    decrypt_hls_segment(bytes, key, &key_map)?
+                } else {
+                    bytes
+                };
+                let path = temp_dir.join(format!("{:08}.ts", segment.index));
+                tokio::fs::write(&path, &bytes)
+                    .await
+                    .map_err(|e| format!("写入 M3U8 分片失败: {e}"))?;
+
+                let mut state = completed.lock().await;
+                state.0 += 1;
+                state.1 += bytes.len() as u64;
+                let downloaded_segments = state.0;
+                let downloaded_bytes = state.1;
+                drop(state);
+
+                let mut report_at = last_report.lock().await;
+                let now = tokio::time::Instant::now();
+                if now.duration_since(*report_at) >= tokio::time::Duration::from_millis(300)
+                    || downloaded_segments == total_segments
+                {
+                    let elapsed = now.duration_since(started_at).as_secs_f64();
+                    let speed = if elapsed > 0.0 {
+                        (downloaded_bytes as f64 / elapsed) as u64
+                    } else {
+                        0
+                    };
+                    let _ = app.emit(
+                        "video-download-progress",
+                        DownloadProgress {
+                            task_id,
+                            downloaded: downloaded_segments,
+                            total: Some(total_segments),
+                            speed,
+                            status: DownloadStatus::Downloading,
+                        },
+                    );
+                    *report_at = now;
+                }
+
+                Ok::<(), String>(())
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+
+    for result in results {
+        if let Err(error) = result {
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(error);
+        }
+    }
+
+    if cancel_token.is_cancelled() {
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        let _ = app.emit(
+            "video-download-progress",
+            DownloadProgress {
+                task_id: task_id.to_string(),
+                downloaded: 0,
+                total: Some(total_segments),
+                speed: 0,
+                status: DownloadStatus::Cancelled,
+            },
+        );
+        return Err("下载已取消".to_string());
+    }
+
+    let joined_ts = temp_dir.join("joined.ts");
+    concat_hls_segments(
+        &client,
+        &format.headers,
+        parsed.init_map_url.as_deref(),
+        &temp_dir,
+        total_segments as usize,
+        &joined_ts,
+    )
+    .await?;
+    remux_ts_to_mp4(&joined_ts, save_path).await?;
+    let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+    Ok(())
+}
+
+struct ResolvedPlaylist {
+    url: String,
+    text: String,
+}
+
+async fn resolve_hls_media_playlist(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<ResolvedPlaylist, String> {
+    let text = request_text(client, url, headers).await?;
+    if !text.contains("#EXT-X-STREAM-INF") {
+        return Ok(ResolvedPlaylist {
+            url: url.to_string(),
+            text,
+        });
+    }
+
+    let variant_url = select_best_variant_url(url, &text)?;
+    let variant_text = request_text(client, &variant_url, headers).await?;
+    Ok(ResolvedPlaylist {
+        url: variant_url,
+        text: variant_text,
+    })
+}
+
+async fn request_text(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<String, String> {
+    let mut request = client.get(url);
+    if !headers.is_empty() {
+        request = request.headers(hash_map_to_header_map(headers));
+    }
+    request
+        .send()
+        .await
+        .map_err(|e| format!("M3U8 请求失败: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("M3U8 响应异常: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("读取 M3U8 失败: {e}"))
+}
+
+async fn download_hls_segment(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &HashMap<String, String>,
+    cancel_token: &CancellationToken,
+) -> Result<Vec<u8>, String> {
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
+        if cancel_token.is_cancelled() {
+            return Err("下载已取消".to_string());
+        }
+        let mut request = client.get(url);
+        if !headers.is_empty() {
+            request = request.headers(hash_map_to_header_map(headers));
+        }
+        match request.send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => match response.bytes().await {
+                    Ok(bytes) => return Ok(bytes.to_vec()),
+                    Err(error) => last_error = error.to_string(),
+                },
+                Err(error) => last_error = error.to_string(),
+            },
+            Err(error) => last_error = error.to_string(),
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(250 * attempt)).await;
+    }
+    Err(format!("下载 M3U8 分片失败: {url}: {last_error}"))
+}
+
+fn parse_hls_segments(base_url: &str, playlist: &str) -> Result<HlsPlaylist, String> {
+    if !playlist.contains("#EXTM3U") {
+        return Err("链接不是有效的 M3U8 播放列表".to_string());
+    }
+
+    let base = url::Url::parse(base_url).map_err(|e| format!("M3U8 URL 无效: {e}"))?;
+    let mut segments = Vec::new();
+    let mut media_sequence = 0_u64;
+    let mut current_key: Option<(String, Option<[u8; 16]>)> = None;
+    let mut init_map_url: Option<String> = None;
+
+    for line in playlist.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+            media_sequence = value.trim().parse::<u64>().unwrap_or(0);
+            continue;
+        }
+        if let Some(attrs) = line.strip_prefix("#EXT-X-MAP:") {
+            if let Some(uri) = parse_m3u8_attr(attrs, "URI") {
+                init_map_url = Some(
+                    base.join(&uri)
+                        .map_err(|e| format!("M3U8 init map URL 无效: {e}"))?
+                        .to_string(),
+                );
+            }
+            continue;
+        }
+        if let Some(attrs) = line.strip_prefix("#EXT-X-KEY:") {
+            let method = parse_m3u8_attr(attrs, "METHOD").unwrap_or_default();
+            if method == "NONE" {
+                current_key = None;
+                continue;
+            }
+            if method != "AES-128" {
+                return Err(format!("暂不支持的 M3U8 加密方式: {method}"));
+            }
+            let uri = parse_m3u8_attr(attrs, "URI")
+                .ok_or_else(|| "M3U8 AES-128 缺少 key URI".to_string())?;
+            let key_url = base
+                .join(&uri)
+                .map_err(|e| format!("M3U8 key URL 无效: {e}"))?
+                .to_string();
+            let iv = parse_m3u8_attr(attrs, "IV")
+                .map(|value| parse_hls_iv(&value))
+                .transpose()?;
+            current_key = Some((key_url, iv));
+            continue;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+
+        let url = base
+            .join(line)
+            .map_err(|e| format!("M3U8 分片 URL 无效: {e}"))?
+            .to_string();
+        let index = segments.len();
+        let key = current_key.as_ref().map(|(uri, iv)| HlsKey {
+            uri: uri.clone(),
+            iv: iv.unwrap_or_else(|| sequence_iv(media_sequence + index as u64)),
+        });
+        segments.push(HlsSegment { index, url, key });
+    }
+    Ok(HlsPlaylist {
+        segments,
+        init_map_url,
+    })
+}
+
+async fn concat_hls_segments(
+    client: &reqwest::Client,
+    headers: &HashMap<String, String>,
+    init_map_url: Option<&str>,
+    temp_dir: &PathBuf,
+    segment_count: usize,
+    output: &PathBuf,
+) -> Result<(), String> {
+    let mut output_file = tokio::fs::File::create(output)
+        .await
+        .map_err(|e| format!("创建 M3U8 合并文件失败: {e}"))?;
+    if let Some(init_map_url) = init_map_url {
+        let bytes =
+            download_hls_segment(client, init_map_url, headers, &CancellationToken::new()).await?;
+        output_file
+            .write_all(&bytes)
+            .await
+            .map_err(|e| format!("写入 M3U8 init map 失败: {e}"))?;
+    }
+    for index in 0..segment_count {
+        let path = temp_dir.join(format!("{index:08}.ts"));
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| format!("读取 M3U8 分片失败: {e}"))?;
+        output_file
+            .write_all(&bytes)
+            .await
+            .map_err(|e| format!("合并 M3U8 分片失败: {e}"))?;
+    }
+    output_file
+        .flush()
+        .await
+        .map_err(|e| format!("刷新 M3U8 合并文件失败: {e}"))?;
+    Ok(())
+}
+
+async fn fetch_hls_keys(
+    client: &reqwest::Client,
+    segments: &[HlsSegment],
+    headers: &HashMap<String, String>,
+) -> Result<HashMap<String, Vec<u8>>, String> {
+    let mut keys = HashMap::new();
+    for segment in segments {
+        let Some(key) = &segment.key else {
+            continue;
+        };
+        if keys.contains_key(&key.uri) {
+            continue;
+        }
+        let bytes =
+            download_hls_segment(client, &key.uri, headers, &CancellationToken::new()).await?;
+        if bytes.len() != 16 {
+            return Err(format!("M3U8 AES-128 key 长度异常: {}", key.uri));
+        }
+        keys.insert(key.uri.clone(), bytes);
+    }
+    Ok(keys)
+}
+
+fn decrypt_hls_segment(
+    mut bytes: Vec<u8>,
+    key: &HlsKey,
+    key_map: &HashMap<String, Vec<u8>>,
+) -> Result<Vec<u8>, String> {
+    let key_bytes = key_map
+        .get(&key.uri)
+        .ok_or_else(|| format!("缺少 M3U8 AES-128 key: {}", key.uri))?;
+    let decryptor = cbc::Decryptor::<aes::Aes128>::new_from_slices(key_bytes, &key.iv)
+        .map_err(|e| format!("初始化 M3U8 AES 解密失败: {e}"))?;
+    let decrypted = decryptor
+        .decrypt_padded_mut::<Pkcs7>(&mut bytes)
+        .map_err(|e| format!("M3U8 AES 分片解密失败: {e}"))?;
+    Ok(decrypted.to_vec())
+}
+
+fn select_best_variant_url(base_url: &str, playlist: &str) -> Result<String, String> {
+    let base = url::Url::parse(base_url).map_err(|e| format!("M3U8 URL 无效: {e}"))?;
+    let mut pending_attrs: Option<String> = None;
+    let mut variants: Vec<(u64, u64, String)> = Vec::new();
+
+    for line in playlist.lines().map(str::trim) {
+        if let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") {
+            pending_attrs = Some(attrs.to_string());
+            continue;
+        }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(attrs) = pending_attrs.take() {
+            let pixels = parse_m3u8_attr(&attrs, "RESOLUTION")
+                .and_then(|resolution| {
+                    let (w, h) = resolution.split_once('x')?;
+                    Some(w.parse::<u64>().ok()? * h.parse::<u64>().ok()?)
+                })
+                .unwrap_or(0);
+            let bandwidth = parse_m3u8_attr(&attrs, "BANDWIDTH")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            let url = base
+                .join(line)
+                .map_err(|e| format!("M3U8 variant URL 无效: {e}"))?
+                .to_string();
+            variants.push((pixels, bandwidth, url));
+        }
+    }
+
+    variants
+        .into_iter()
+        .max_by_key(|(pixels, bandwidth, _)| (*pixels, *bandwidth))
+        .map(|(_, _, url)| url)
+        .ok_or_else(|| "M3U8 master playlist 没有可用 variant".to_string())
+}
+
+fn parse_m3u8_attr(attrs: &str, key: &str) -> Option<String> {
+    attrs.split(',').find_map(|part| {
+        let (name, value) = part.split_once('=')?;
+        if name.trim() == key {
+            Some(value.trim().trim_matches('"').to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn parse_hls_iv(value: &str) -> Result<[u8; 16], String> {
+    let hex = value
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    if hex.len() > 32 {
+        return Err("M3U8 IV 长度异常".to_string());
+    }
+    let padded = format!("{hex:0>32}");
+    let mut iv = [0_u8; 16];
+    for index in 0..16 {
+        iv[index] = u8::from_str_radix(&padded[index * 2..index * 2 + 2], 16)
+            .map_err(|_| "M3U8 IV 格式异常".to_string())?;
+    }
+    Ok(iv)
+}
+
+fn sequence_iv(sequence: u64) -> [u8; 16] {
+    let mut iv = [0_u8; 16];
+    iv[8..].copy_from_slice(&sequence.to_be_bytes());
+    iv
+}
+
+async fn remux_ts_to_mp4(input: &PathBuf, output: &PathBuf) -> Result<(), String> {
+    let output_result = tokio::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            input.to_str().unwrap_or_default(),
+            "-c",
+            "copy",
+            "-bsf:a",
+            "aac_adtstoasc",
+            "-movflags",
+            "+faststart",
+            output.to_str().unwrap_or_default(),
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("启动 ffmpeg 转封装失败: {e}"))?;
+
+    if output_result.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output_result.stderr);
+        Err(format!("ffmpeg 转封装 M3U8 失败: {}", detail.trim()))
+    }
 }
 
 async fn download_stream(
@@ -349,193 +831,6 @@ async fn download_stream(
     Ok(())
 }
 
-async fn download_hls_with_ffmpeg(
-    app: &AppHandle,
-    task_id: &str,
-    format: &VideoFormat,
-    save_path: &PathBuf,
-    cancel_token: &CancellationToken,
-) -> Result<(), String> {
-    let total_duration_us = probe_hls_duration_us(format).await;
-    let user_agent = format
-        .headers
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
-        .map(|(_, value)| value.as_str())
-        .unwrap_or("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
-    let mut args = vec![
-        "-y".to_string(),
-        "-hide_banner".to_string(),
-        "-loglevel".to_string(),
-        "error".to_string(),
-        "-user_agent".to_string(),
-        user_agent.to_string(),
-    ];
-    if let Some(headers) = ffmpeg_headers_arg(&format.headers) {
-        args.push("-headers".to_string());
-        args.push(headers);
-    }
-    args.extend([
-        "-protocol_whitelist".to_string(),
-        "file,http,https,tcp,tls,crypto".to_string(),
-        "-allowed_segment_extensions".to_string(),
-        "ALL".to_string(),
-        "-extension_picky".to_string(),
-        "0".to_string(),
-        "-http_persistent".to_string(),
-        "1".to_string(),
-        "-http_multiple".to_string(),
-        "1".to_string(),
-        "-i".to_string(),
-        format.url.clone(),
-        "-c".to_string(),
-        "copy".to_string(),
-        "-bsf:a".to_string(),
-        "aac_adtstoasc".to_string(),
-        "-movflags".to_string(),
-        "+faststart".to_string(),
-        "-progress".to_string(),
-        "pipe:1".to_string(),
-        "-nostats".to_string(),
-        save_path.to_str().unwrap_or_default().to_string(),
-    ]);
-
-    let mut child = tokio::process::Command::new("ffmpeg")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动 ffmpeg 下载 M3U8 失败: {e}"))?;
-
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "无法读取 ffmpeg 进度输出".to_string())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "无法读取 ffmpeg 错误输出".to_string())?;
-    let mut lines = BufReader::new(stdout).lines();
-    let stderr_task = tokio::spawn(async move {
-        let mut buffer = String::new();
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if !line.trim().is_empty() {
-                if buffer.len() < 4000 {
-                    buffer.push_str(&line);
-                    buffer.push('\n');
-                }
-            }
-        }
-        buffer
-    });
-    let mut last_out_us = 0_u64;
-    let mut last_report = tokio::time::Instant::now();
-
-    loop {
-        tokio::select! {
-            _ = cancel_token.cancelled() => {
-                let _ = child.kill().await;
-                let _ = tokio::fs::remove_file(save_path).await;
-                let _ = app.emit(
-                    "video-download-progress",
-                    DownloadProgress {
-                        task_id: task_id.to_string(),
-                        downloaded: last_out_us,
-                        total: total_duration_us,
-                        speed: 0,
-                        status: DownloadStatus::Cancelled,
-                    },
-                );
-                return Err("下载已取消".to_string());
-            }
-            line = lines.next_line() => {
-                match line {
-                    Ok(Some(line)) => {
-                        if let Some(value) = line.strip_prefix("out_time_ms=") {
-                            if let Ok(out_us) = value.parse::<u64>() {
-                                last_out_us = out_us;
-                                let now = tokio::time::Instant::now();
-                                if now.duration_since(last_report) >= tokio::time::Duration::from_millis(500) {
-                                    let _ = app.emit(
-                                        "video-download-progress",
-                                        DownloadProgress {
-                                            task_id: task_id.to_string(),
-                                            downloaded: out_us,
-                                            total: total_duration_us,
-                                            speed: 0,
-                                            status: DownloadStatus::Downloading,
-                                        },
-                                    );
-                                    last_report = now;
-                                }
-                            }
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(error) => return Err(format!("读取 ffmpeg 进度失败: {error}")),
-                }
-            }
-        }
-    }
-
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("等待 ffmpeg 下载完成失败: {e}"))?;
-    let stderr = stderr_task.await.unwrap_or_default();
-
-    if status.success() {
-        Ok(())
-    } else {
-        let _ = tokio::fs::remove_file(save_path).await;
-        let detail = stderr.trim();
-        if detail.is_empty() {
-            Err("ffmpeg 下载 M3U8 失败".to_string())
-        } else {
-            Err(format!("ffmpeg 下载 M3U8 失败: {detail}"))
-        }
-    }
-}
-
-async fn probe_hls_duration_us(format: &VideoFormat) -> Option<u64> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .ok()?;
-    let mut request = client.get(&format.url);
-    if !format.headers.is_empty() {
-        request = request.headers(hash_map_to_header_map(&format.headers));
-    }
-    let playlist = request.send().await.ok()?.text().await.ok()?;
-    let seconds = playlist
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("#EXTINF:"))
-        .filter_map(|value| value.split(',').next())
-        .filter_map(|value| value.parse::<f64>().ok())
-        .sum::<f64>();
-
-    if seconds > 0.0 {
-        Some((seconds * 1_000_000.0) as u64)
-    } else {
-        None
-    }
-}
-
-fn ffmpeg_headers_arg(headers: &HashMap<String, String>) -> Option<String> {
-    let value = headers
-        .iter()
-        .filter(|(name, _)| !name.eq_ignore_ascii_case("user-agent"))
-        .map(|(name, value)| format!("{name}: {value}\r\n"))
-        .collect::<String>();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
 fn is_m3u8_url(url: &str) -> bool {
     url.contains(".m3u8")
 }
@@ -574,4 +869,47 @@ fn sanitize_filename(name: &str) -> String {
         .collect::<String>()
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_hls_segments_with_relative_urls() {
+        let playlist = r#"#EXTM3U
+#EXT-X-TARGETDURATION:4
+#EXTINF:4.0,
+video0.jpeg
+#EXTINF:4.0,
+nested/video1.ts
+"#;
+
+        let segments =
+            parse_hls_segments("https://example.com/path/video.m3u8", playlist).expect("segments");
+        assert_eq!(segments.segments.len(), 2);
+        assert_eq!(
+            segments.segments[0].url,
+            "https://example.com/path/video0.jpeg"
+        );
+        assert_eq!(
+            segments.segments[1].url,
+            "https://example.com/path/nested/video1.ts"
+        );
+    }
+
+    #[test]
+    fn parses_aes_128_hls() {
+        let playlist = r#"#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="key.key"
+#EXTINF:4.0,
+video0.ts
+"#;
+
+        let segments =
+            parse_hls_segments("https://example.com/video.m3u8", playlist).expect("segments");
+        let key = segments.segments[0].key.as_ref().expect("key");
+        assert_eq!(key.uri, "https://example.com/key.key");
+        assert_eq!(key.iv, sequence_iv(0));
+    }
 }

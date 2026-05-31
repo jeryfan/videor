@@ -94,6 +94,7 @@ export function useSettingsForm(): UseSettingsFormResult {
       silentStartup: data.silentStartup ?? false,
       language: normalizedLanguage,
       downloadDirectory: data.downloadDirectory,
+      m3u8Concurrency: data.m3u8Concurrency ?? 8,
     };
 
     setSettingsState(normalized);
@@ -113,6 +114,7 @@ export function useSettingsForm(): UseSettingsFormResult {
             silentStartup: false,
             language: readPersistedLanguage(),
             downloadDirectory: undefined,
+            m3u8Concurrency: 8,
           } as SettingsFormState);
 
         const next: SettingsFormState = {
@@ -148,6 +150,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         silentStartup: serverData.silentStartup ?? false,
         language: normalizedLanguage,
         downloadDirectory: serverData.downloadDirectory,
+        m3u8Concurrency: serverData.m3u8Concurrency ?? 8,
       };
 
       setSettingsState(normalized);

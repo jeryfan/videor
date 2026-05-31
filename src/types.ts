@@ -22,6 +22,8 @@ export interface Settings {
   globalProxy?: string;
   // 默认下载目录
   downloadDirectory?: string;
+  // M3U8 分片并发下载数
+  m3u8Concurrency?: number;
 
   // Backend may send additional fields; accept them silently
   [key: string]: any;

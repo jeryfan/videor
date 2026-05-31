@@ -24,6 +24,7 @@ import { WindowSettings } from "@/components/settings/WindowSettings";
 import { GlobalProxySettings } from "@/components/settings/GlobalProxySettings";
 import { DownloadDirectorySettings } from "@/components/settings/DownloadDirectorySettings";
 import { FfmpegSettings } from "@/components/settings/FfmpegSettings";
+import { M3u8DownloadSettings } from "@/components/settings/M3u8DownloadSettings";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "react-i18next";
@@ -145,7 +146,9 @@ export function SettingsPage({
             <TabsTrigger value="general">
               {t("settings.tabGeneral")}
             </TabsTrigger>
-            <TabsTrigger value="download">{t("settings.tabDownload", { defaultValue: "下载" })}</TabsTrigger>
+            <TabsTrigger value="download">
+              {t("settings.tabDownload", { defaultValue: "下载" })}
+            </TabsTrigger>
             <TabsTrigger value="about">{t("common.about")}</TabsTrigger>
           </TabsList>
 
@@ -195,7 +198,6 @@ export function SettingsPage({
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>
-
                   </motion.div>
                 ) : null}
               </TabsContent>
@@ -212,6 +214,10 @@ export function SettingsPage({
                       directory={settings.downloadDirectory}
                       onChange={handleAutoSave}
                     />
+                    <M3u8DownloadSettings
+                      concurrency={settings.m3u8Concurrency}
+                      onChange={handleAutoSave}
+                    />
                     <FfmpegSettings />
                   </motion.div>
                 ) : null}
@@ -221,28 +227,29 @@ export function SettingsPage({
               </TabsContent>
             </div>
 
-            {(activeTab === "general" || activeTab === "download") && settings && (
-              <div
-                className="flex-shrink-0 pt-4 border-t border-border-default"
-                style={{ backgroundColor: "hsl(var(--background))" }}
-              >
-                <div className="px-6 flex items-center justify-end gap-3">
-                  <Button onClick={handleSave} disabled={isSaving}>
-                    {isSaving ? (
-                      <span className="inline-flex items-center gap-2">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        {t("settings.saving")}
-                      </span>
-                    ) : (
-                      <>
-                        <Save className="mr-2 h-4 w-4" />
-                        {t("common.save")}
-                      </>
-                    )}
-                  </Button>
+            {(activeTab === "general" || activeTab === "download") &&
+              settings && (
+                <div
+                  className="flex-shrink-0 pt-4 border-t border-border-default"
+                  style={{ backgroundColor: "hsl(var(--background))" }}
+                >
+                  <div className="px-6 flex items-center justify-end gap-3">
+                    <Button onClick={handleSave} disabled={isSaving}>
+                      {isSaving ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {t("settings.saving")}
+                        </span>
+                      ) : (
+                        <>
+                          <Save className="mr-2 h-4 w-4" />
+                          {t("common.save")}
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
           </div>
         </Tabs>
       )}
