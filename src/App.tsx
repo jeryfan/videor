@@ -65,6 +65,14 @@ function App() {
     isLinux() && (settingsData?.useAppWindowControls ?? false);
   const dragBarHeight = useAppWindowControls ? 32 : DEFAULT_DRAG_BAR_HEIGHT;
   const contentTopOffset = dragBarHeight + HEADER_HEIGHT;
+  const videoPlatformLabel =
+    videoPlatform === "douyin"
+      ? "抖音"
+      : videoPlatform === "bilibili"
+        ? "B站"
+        : videoPlatform
+          ? "直链"
+          : "";
 
   useEffect(() => {
     let active = true;
@@ -406,20 +414,22 @@ function App() {
         ) : showHistory ? (
           <div className="flex flex-col h-full" />
         ) : (
-          <div className="flex flex-col items-center flex-1 px-6">
-            <div className="w-full max-w-4xl space-y-4">
+          <div className="flex flex-col items-center flex-1">
+            <div className="w-full max-w-4xl">
               {/* 输入框 */}
-              <div className="relative">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/50" />
-                <Input
-                  value={downloadUrl}
-                  onChange={(e) => setDownloadUrl(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={t("download.urlPlaceholder", {
-                    defaultValue: "粘贴视频链接，按 Enter 开始解析...",
-                  })}
-                  className="w-full h-14 pl-11 pr-5 text-base rounded-2xl border border-border bg-background/60 shadow-none focus:ring-0 focus:border-border focus:shadow-none"
-                />
+              <div className="sticky top-0 z-30 bg-background/95 py-2 backdrop-blur-md">
+                <div className="relative">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/50" />
+                  <Input
+                    value={downloadUrl}
+                    onChange={(e) => setDownloadUrl(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={t("download.urlPlaceholder", {
+                      defaultValue: "粘贴视频链接，按 Enter 开始解析...",
+                    })}
+                    className="w-full h-14 pl-11 pr-5 text-base rounded-2xl border border-border bg-background/60 shadow-none focus:ring-0 focus:border-border focus:shadow-none"
+                  />
+                </div>
               </div>
 
               {/* 解析 Loading */}
@@ -436,13 +446,13 @@ function App() {
               {parseStatus === "success" && videoFormats.length > 0 && (
                 <div className="animate-fade-in space-y-3">
                   {/* 视频容器：悬浮时显示下载按钮 */}
-                  <div className="relative group flex justify-center rounded-xl">
+                  <div className="relative group flex w-full justify-center overflow-hidden rounded-xl bg-black">
                     <video
                       key={selectedFormatIdx}
                       src={videoFormats[selectedFormatIdx]?.url}
                       controls
                       poster={videoCover || undefined}
-                      className="h-auto max-h-[65vh] w-auto max-w-full rounded-xl"
+                      className="h-auto max-h-[calc(100vh-220px)] w-full rounded-xl object-contain"
                     />
                     {/* 悬浮下载按钮 / 进度 */}
                     <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-end gap-2">
@@ -491,14 +501,22 @@ function App() {
                   </div>
 
                   <div className="space-y-2">
-                    {videoTitle && (
-                      <p className="text-sm font-medium text-foreground truncate">
-                        {videoTitle}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-3 flex-wrap">
-                      {/* 清晰度选择 */}
-                      {videoFormats.length > 1 && (
+                    <div className="flex items-center justify-between gap-3">
+                      {videoTitle ? (
+                        <p className="min-w-0 truncate text-sm font-medium text-foreground">
+                          {videoTitle}
+                        </p>
+                      ) : (
+                        <span className="min-w-0" />
+                      )}
+                      {videoPlatformLabel && (
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          来源: {videoPlatformLabel}
+                        </span>
+                      )}
+                    </div>
+                    {videoFormats.length > 1 && (
+                      <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-muted-foreground">
                             清晰度:
@@ -517,18 +535,8 @@ function App() {
                             ))}
                           </select>
                         </div>
-                      )}
-                      {videoPlatform && (
-                        <span className="text-xs text-muted-foreground">
-                          来源:{" "}
-                          {videoPlatform === "douyin"
-                            ? "抖音"
-                            : videoPlatform === "bilibili"
-                              ? "B站"
-                              : "直链"}
-                        </span>
-                      )}
-                    </div>
+                      </div>
+                    )}
 
                     {downloadError && (
                       <p className="text-xs text-destructive">
