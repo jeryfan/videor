@@ -28,8 +28,8 @@ use std::sync::Arc;
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
 use tauri::tray::TrayIconBuilder;
-use tauri::RunEvent;
 use tauri::Manager;
+use tauri::RunEvent;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 fn redact_url_for_log(url_str: &str) -> String {
@@ -75,7 +75,10 @@ fn handle_deeplink_url(
         return false;
     }
 
-    log::info!("Deep link URL detected from {source}: {}", redact_url_for_log(url_str));
+    log::info!(
+        "Deep link URL detected from {source}: {}",
+        redact_url_for_log(url_str)
+    );
 
     if focus_main_window {
         if let Some(window) = app.get_webview_window("main") {
@@ -505,6 +508,7 @@ pub fn run() {
             commands::scan_local_proxies,
             // Video parser
             commands::parse_video,
+            commands::parse_video_with_curl,
             commands::bilibili_login_qr_generate,
             commands::bilibili_login_qr_poll,
             commands::bilibili_login_status,
@@ -579,7 +583,8 @@ pub fn run() {
 
                         if url_str.starts_with("videor://") {
                             if crate::lightweight::is_lightweight_mode() {
-                                if let Err(e) = crate::lightweight::exit_lightweight_mode(app_handle)
+                                if let Err(e) =
+                                    crate::lightweight::exit_lightweight_mode(app_handle)
                                 {
                                     log::error!("退出轻量模式重建窗口失败: {e}");
                                 }
@@ -613,10 +618,6 @@ pub fn run() {
 pub async fn cleanup_before_exit(_app_handle: &tauri::AppHandle) {
     log::info!("cleanup_before_exit: legacy proxy cleanup skipped");
 }
-
-
-
-
 
 // ============================================================
 // 迁移错误对话框辅助函数

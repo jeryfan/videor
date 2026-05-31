@@ -52,7 +52,6 @@ pub fn get_app_config_path() -> PathBuf {
     get_app_config_dir().join("config.json")
 }
 
-
 /// 原子写入：写入临时文件后 rename 替换，避免半写状态
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
@@ -108,5 +107,3 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AppError> {
     }
     Ok(())
 }
-
-

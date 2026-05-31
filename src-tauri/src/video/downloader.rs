@@ -1,4 +1,4 @@
-use super::VideoFormat;
+use super::{hash_map_to_header_map, VideoFormat};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -150,14 +150,32 @@ async fn do_download(
         .map_err(|e| e.to_string())?;
 
     if is_m3u8_url(&format.url) {
-        download_hls_with_ffmpeg(app, task_id, &format.url, save_path, cancel_token).await?;
+        download_hls_with_ffmpeg(app, task_id, format, save_path, cancel_token).await?;
     } else if let Some(audio_url) = &format.audio_url {
         // DASH 格式：分别下载视频和音频，然后合并
         let video_tmp = save_path.with_extension("video.tmp");
         let audio_tmp = save_path.with_extension("audio.tmp");
 
-        download_stream(app, task_id, &client, &format.url, &video_tmp, cancel_token).await?;
-        download_stream(app, task_id, &client, audio_url, &audio_tmp, cancel_token).await?;
+        download_stream(
+            app,
+            task_id,
+            &client,
+            format,
+            &format.url,
+            &video_tmp,
+            cancel_token,
+        )
+        .await?;
+        download_stream(
+            app,
+            task_id,
+            &client,
+            format,
+            audio_url,
+            &audio_tmp,
+            cancel_token,
+        )
+        .await?;
 
         // 尝试用 ffmpeg 合并
         let mux_result = tokio::process::Command::new("ffmpeg")
@@ -185,13 +203,30 @@ async fn do_download(
             Ok(status) if status.success() => {}
             _ => {
                 // ffmpeg 不可用或失败：只保留视频流
-                download_stream(app, task_id, &client, &format.url, save_path, cancel_token)
-                    .await?;
+                download_stream(
+                    app,
+                    task_id,
+                    &client,
+                    format,
+                    &format.url,
+                    save_path,
+                    cancel_token,
+                )
+                .await?;
             }
         }
     } else {
         // 单流格式：直接下载
-        download_stream(app, task_id, &client, &format.url, save_path, cancel_token).await?;
+        download_stream(
+            app,
+            task_id,
+            &client,
+            format,
+            &format.url,
+            save_path,
+            cancel_token,
+        )
+        .await?;
     }
 
     Ok(())
@@ -201,6 +236,7 @@ async fn download_stream(
     app: &AppHandle,
     task_id: &str,
     _client: &reqwest::Client,
+    format: &VideoFormat,
     url: &str,
     save_path: &PathBuf,
     cancel_token: &CancellationToken,
@@ -224,6 +260,9 @@ async fn download_stream(
         .map_err(|e| e.to_string())?;
 
     let mut req = dl_client.get(&final_url);
+    if !format.headers.is_empty() {
+        req = req.headers(hash_map_to_header_map(&format.headers));
+    }
     if let Some(r) = referer {
         req = req.header("Referer", r);
     }
@@ -313,34 +352,56 @@ async fn download_stream(
 async fn download_hls_with_ffmpeg(
     app: &AppHandle,
     task_id: &str,
-    url: &str,
+    format: &VideoFormat,
     save_path: &PathBuf,
     cancel_token: &CancellationToken,
 ) -> Result<(), String> {
-    let total_duration_us = probe_hls_duration_us(url).await;
+    let total_duration_us = probe_hls_duration_us(format).await;
+    let user_agent = format
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+        .map(|(_, value)| value.as_str())
+        .unwrap_or("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+    let mut args = vec![
+        "-y".to_string(),
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "error".to_string(),
+        "-user_agent".to_string(),
+        user_agent.to_string(),
+    ];
+    if let Some(headers) = ffmpeg_headers_arg(&format.headers) {
+        args.push("-headers".to_string());
+        args.push(headers);
+    }
+    args.extend([
+        "-protocol_whitelist".to_string(),
+        "file,http,https,tcp,tls,crypto".to_string(),
+        "-allowed_segment_extensions".to_string(),
+        "ALL".to_string(),
+        "-extension_picky".to_string(),
+        "0".to_string(),
+        "-http_persistent".to_string(),
+        "1".to_string(),
+        "-http_multiple".to_string(),
+        "1".to_string(),
+        "-i".to_string(),
+        format.url.clone(),
+        "-c".to_string(),
+        "copy".to_string(),
+        "-bsf:a".to_string(),
+        "aac_adtstoasc".to_string(),
+        "-movflags".to_string(),
+        "+faststart".to_string(),
+        "-progress".to_string(),
+        "pipe:1".to_string(),
+        "-nostats".to_string(),
+        save_path.to_str().unwrap_or_default().to_string(),
+    ]);
+
     let mut child = tokio::process::Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-user_agent",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            "-protocol_whitelist",
-            "file,http,https,tcp,tls,crypto",
-            "-i",
-            url,
-            "-c",
-            "copy",
-            "-bsf:a",
-            "aac_adtstoasc",
-            "-movflags",
-            "+faststart",
-            "-progress",
-            "pipe:1",
-            "-nostats",
-            save_path.to_str().unwrap_or_default(),
-        ])
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -350,7 +411,24 @@ async fn download_hls_with_ffmpeg(
         .stdout
         .take()
         .ok_or_else(|| "无法读取 ffmpeg 进度输出".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "无法读取 ffmpeg 错误输出".to_string())?;
     let mut lines = BufReader::new(stdout).lines();
+    let stderr_task = tokio::spawn(async move {
+        let mut buffer = String::new();
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            if !line.trim().is_empty() {
+                if buffer.len() < 4000 {
+                    buffer.push_str(&line);
+                    buffer.push('\n');
+                }
+            }
+        }
+        buffer
+    });
     let mut last_out_us = 0_u64;
     let mut last_report = tokio::time::Instant::now();
 
@@ -405,22 +483,32 @@ async fn download_hls_with_ffmpeg(
         .wait()
         .await
         .map_err(|e| format!("等待 ffmpeg 下载完成失败: {e}"))?;
+    let stderr = stderr_task.await.unwrap_or_default();
 
     if status.success() {
         Ok(())
     } else {
         let _ = tokio::fs::remove_file(save_path).await;
-        Err("ffmpeg 下载 M3U8 失败".to_string())
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            Err("ffmpeg 下载 M3U8 失败".to_string())
+        } else {
+            Err(format!("ffmpeg 下载 M3U8 失败: {detail}"))
+        }
     }
 }
 
-async fn probe_hls_duration_us(url: &str) -> Option<u64> {
+async fn probe_hls_duration_us(format: &VideoFormat) -> Option<u64> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()
         .ok()?;
-    let playlist = client.get(url).send().await.ok()?.text().await.ok()?;
+    let mut request = client.get(&format.url);
+    if !format.headers.is_empty() {
+        request = request.headers(hash_map_to_header_map(&format.headers));
+    }
+    let playlist = request.send().await.ok()?.text().await.ok()?;
     let seconds = playlist
         .lines()
         .filter_map(|line| line.trim().strip_prefix("#EXTINF:"))
@@ -432,6 +520,19 @@ async fn probe_hls_duration_us(url: &str) -> Option<u64> {
         Some((seconds * 1_000_000.0) as u64)
     } else {
         None
+    }
+}
+
+fn ffmpeg_headers_arg(headers: &HashMap<String, String>) -> Option<String> {
+    let value = headers
+        .iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("user-agent"))
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
     }
 }
 

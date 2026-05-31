@@ -20,8 +20,6 @@ mod dao;
 mod migration;
 mod schema;
 
-
-
 // DAO 类型导出供外部使用
 
 use crate::config::get_app_config_dir;
@@ -210,6 +208,4 @@ impl Database {
 
         Ok(rebuilt)
     }
-
-
 }

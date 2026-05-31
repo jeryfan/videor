@@ -15,8 +15,6 @@ use tempfile::NamedTempFile;
 
 const VIDEOR_SQL_EXPORT_HEADER: &str = "-- Videor SQLite 导出";
 
-
-
 /// A database backup entry for the UI
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -321,8 +319,6 @@ impl Database {
         Ok(())
     }
 
-
-
     /// 导出数据库为 SQL 文本
     fn dump_sql(conn: &Connection, skip_tables: &[&str]) -> Result<String, AppError> {
         let mut output = String::new();
@@ -625,5 +621,3 @@ impl Database {
         Ok(())
     }
 }
-
-

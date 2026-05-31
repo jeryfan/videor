@@ -20,6 +20,7 @@ import {
   LogOut,
   ChevronDown,
   ChevronRight,
+  FileText,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { join } from "@tauri-apps/api/path";
@@ -96,9 +97,9 @@ const VIDEO_SOURCES: Array<{
 ];
 
 const getInitialVideoSource = (): VideoSource => {
-  const saved = localStorage.getItem(VIDEO_SOURCE_STORAGE_KEY) as
-    | VideoSource
-    | null;
+  const saved = localStorage.getItem(
+    VIDEO_SOURCE_STORAGE_KEY,
+  ) as VideoSource | null;
   if (saved && VIDEO_SOURCES.some((source) => source.id === saved)) {
     return saved;
   }
@@ -118,6 +119,49 @@ function sanitizePathSegment(value: string): string {
 function formatBatchItemTitle(index: number, title: string): string {
   const prefix = String(index + 1).padStart(2, "0");
   return `${prefix}.${sanitizePathSegment(title || "Bilibili视频")}`;
+}
+
+function extractUrlFromCurl(rawCurl: string): string | null {
+  const trimmed = rawCurl.trim();
+  if (!trimmed.startsWith("curl ")) return null;
+
+  const urlFlag = trimmed.match(/(?:^|\s)--url\s+(['"])(https?:\/\/.*?)\1/s);
+  if (urlFlag?.[2]) return urlFlag[2];
+
+  const quotedUrl = trimmed.match(/(?:^|\s)(['"])(https?:\/\/.*?)\1/s);
+  if (quotedUrl?.[2]) return quotedUrl[2];
+
+  const bareUrl = trimmed.match(/(?:^|\s)(https?:\/\/[^\s'"\\]+)/);
+  return bareUrl?.[1] ?? null;
+}
+
+function countUsableCurlHeaders(rawCurl: string): number {
+  if (!rawCurl.trim().startsWith("curl ")) return 0;
+
+  const blocked = new Set([
+    "host",
+    "authority",
+    "method",
+    "path",
+    "scheme",
+    "content-length",
+    "connection",
+    "transfer-encoding",
+    "accept-encoding",
+    "upgrade",
+    "proxy-connection",
+  ]);
+
+  return Array.from(
+    rawCurl.matchAll(/(?:^|\s)(?:-H|--header)\s+(['"])(.*?)\1/gs),
+  ).filter((match) => {
+    const header = match[2];
+    const separator = header.indexOf(":");
+    if (separator <= 0) return false;
+    const name = header.slice(0, separator).trim().toLowerCase();
+    const value = header.slice(separator + 1).trim();
+    return Boolean(name && value && !blocked.has(name));
+  }).length;
 }
 
 function batchStatusLabel(status: BatchDownloadStatus): string {
@@ -186,6 +230,8 @@ function App() {
     getInitialVideoSource,
   );
   const [downloadUrl, setDownloadUrl] = useState("");
+  const [isCurlDialogOpen, setIsCurlDialogOpen] = useState(false);
+  const [m3u8CurlRaw, setM3u8CurlRaw] = useState("");
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [videoFormats, setVideoFormats] = useState<VideoFormat[]>([]);
   const [selectedFormatIdx, setSelectedFormatIdx] = useState(0);
@@ -219,6 +265,7 @@ function App() {
     BatchDownloadItem[]
   >([]);
   const [isBatchHistoryExpanded, setIsBatchHistoryExpanded] = useState(false);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const batchTaskIdsRef = useRef<Set<string>>(new Set());
 
   const { data: settingsData } = useSettingsQuery();
@@ -234,10 +281,9 @@ function App() {
         : videoPlatform
           ? "直链"
           : "";
-  const previewVideoUrl =
-    videoPlatform === "bilibili" && videoFormats[selectedFormatIdx]?.preview_url
-      ? videoFormats[selectedFormatIdx].preview_url
-      : videoPlatform === "bilibili" && videoFormats[selectedFormatIdx]?.url
+  const previewVideoUrl = videoFormats[selectedFormatIdx]?.preview_url
+    ? videoFormats[selectedFormatIdx].preview_url
+    : videoPlatform === "bilibili" && videoFormats[selectedFormatIdx]?.url
       ? `videor-stream://localhost/video?url=${encodeURIComponent(
           videoFormats[selectedFormatIdx].url,
         )}`
@@ -276,6 +322,7 @@ function App() {
           : activeBatchCount > 0
             ? "downloading"
             : "queued";
+  const m3u8CurlHeaderCount = countUsableCurlHeaders(m3u8CurlRaw);
 
   useEffect(() => {
     let active = true;
@@ -454,7 +501,10 @@ function App() {
     batchTaskIdsRef.current.clear();
 
     try {
-      const info = await parseVideo(rawInput);
+      const info = await parseVideo(
+        rawInput,
+        activeSource === "m3u8" ? m3u8CurlRaw : undefined,
+      );
       setVideoFormats(info.formats);
       setVideoTitle(info.title);
       setVideoCover(info.cover_url || "");
@@ -470,7 +520,7 @@ function App() {
       toast.error(extractErrorMessage(error) || "视频解析失败");
       setParseStatus("error");
     }
-  }, [downloadUrl, t]);
+  }, [activeSource, downloadUrl, m3u8CurlRaw, t]);
 
   // 监听下载进度
   useEffect(() => {
@@ -501,8 +551,7 @@ function App() {
                 status: nextStatus,
                 progress: nextStatus === "completed" ? 100 : percent,
                 speed: progress.speed,
-                error:
-                  progress.status === "failed" ? "下载失败" : item.error,
+                error: progress.status === "failed" ? "下载失败" : item.error,
               };
             }),
           );
@@ -686,12 +735,7 @@ function App() {
         toast.error(`${item.title}: ${message}`);
       }
     }
-  }, [
-    ensureDownloadDirectory,
-    selectedVideoItems,
-    videoItems,
-    videoTitle,
-  ]);
+  }, [ensureDownloadDirectory, selectedVideoItems, videoItems, videoTitle]);
 
   const handleCancelDownload = useCallback(async () => {
     if (!downloadTaskId) return;
@@ -701,6 +745,26 @@ function App() {
       console.error("[Download] Failed to cancel:", error);
     }
   }, [downloadTaskId]);
+
+  const handleBackToMain = useCallback(() => {
+    setShowSettings(false);
+    setShowHistory(false);
+  }, []);
+
+  const handleDownloadUrlChange = useCallback(
+    (value: string) => {
+      if (activeSource === "m3u8" && value.trim().startsWith("curl ")) {
+        setM3u8CurlRaw(value);
+        const url = extractUrlFromCurl(value);
+        if (url) {
+          setDownloadUrl(url);
+          return;
+        }
+      }
+      setDownloadUrl(value);
+    },
+    [activeSource],
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
@@ -789,12 +853,63 @@ function App() {
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsBilibiliLoginOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setIsBilibiliLoginOpen(false)}
+            >
               取消
             </Button>
-            <Button variant="secondary" onClick={() => void handleOpenBilibiliLogin()}>
+            <Button
+              variant="secondary"
+              onClick={() => void handleOpenBilibiliLogin()}
+            >
               刷新二维码
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCurlDialogOpen} onOpenChange={setIsCurlDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>M3U8 cURL</DialogTitle>
+            <DialogDescription>
+              粘贴浏览器 Network 面板复制的完整 cURL，解析和下载会提取其中的
+              headers。
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            value={m3u8CurlRaw}
+            onChange={(event) => {
+              const nextCurl = event.target.value;
+              setM3u8CurlRaw(nextCurl);
+              const url = extractUrlFromCurl(nextCurl);
+              if (url) {
+                setDownloadUrl(url);
+              }
+            }}
+            spellCheck={false}
+            placeholder={
+              "curl 'https://example.com/video.m3u8' \\\n  -H 'Referer: https://example.com/' \\\n  -H 'User-Agent: Mozilla/5.0 ...'"
+            }
+            className="min-h-72 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-5 !outline-none !ring-0 focus:border-border focus:!outline-none focus:!ring-0 focus-visible:!outline-none focus-visible:!ring-0"
+          />
+          <DialogFooter className="items-center justify-between gap-3 sm:justify-between">
+            <span className="text-xs text-muted-foreground">
+              {m3u8CurlHeaderCount > 0
+                ? `将使用 ${m3u8CurlHeaderCount} 个 header`
+                : "未配置可用 cURL"}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setM3u8CurlRaw("")}
+                disabled={!m3u8CurlRaw}
+              >
+                清空
+              </Button>
+              <Button onClick={() => setIsCurlDialogOpen(false)}>完成</Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -823,10 +938,7 @@ function App() {
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => {
-                  setShowSettings(false);
-                  setShowHistory(false);
-                }}
+                onClick={handleBackToMain}
                 className="mr-2 rounded-lg"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -919,417 +1031,447 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in px-6">
-        {showSettings ? (
+      <main className="relative flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in px-6">
+        <div
+          className={cn(
+            "min-h-0 flex-1 flex-col",
+            showSettings ? "flex" : "hidden",
+          )}
+        >
           <SettingsPage
             open={true}
             onOpenChange={() => setShowSettings(false)}
             defaultTab="general"
           />
-        ) : showHistory ? (
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-3 py-4">
-            {batchDownloadItems.length === 0 && !downloadTaskId && (
-              <div className="rounded-xl border border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-                暂无下载任务
-              </div>
-            )}
+        </div>
 
-            {downloadTaskId && batchDownloadItems.length === 0 && (
-              <div className="rounded-xl border border-border bg-background p-4">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{videoTitle}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      单视频 · 下载中
-                    </p>
-                  </div>
-                  <span className="text-sm tabular-nums text-muted-foreground">
-                    {downloadProgress}%
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCancelDownload}
-                    className="h-8 px-3 text-xs"
-                  >
-                    取消
-                  </Button>
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-primary transition-all duration-300"
-                      style={{ width: `${downloadProgress}%` }}
-                    />
-                  </div>
-                  {downloadSpeed > 0 && (
-                    <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                      {(downloadSpeed / 1024 / 1024).toFixed(1)}MB/s
-                    </span>
-                  )}
-                </div>
-                {downloadError && (
-                  <p className="mt-2 text-xs text-destructive">
-                    {downloadError}
+        <div
+          className={cn(
+            "mx-auto w-full max-w-4xl flex-col gap-3 py-4",
+            showHistory ? "flex" : "hidden",
+          )}
+        >
+          {batchDownloadItems.length === 0 && !downloadTaskId && (
+            <div className="rounded-xl border border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
+              暂无下载任务
+            </div>
+          )}
+
+          {downloadTaskId && batchDownloadItems.length === 0 && (
+            <div className="rounded-xl border border-border bg-background p-4">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{videoTitle}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    单视频 · 下载中
                   </p>
-                )}
-              </div>
-            )}
-
-            {batchDownloadItems.length > 0 && (
-              <div className="overflow-hidden rounded-xl border border-border bg-background">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setIsBatchHistoryExpanded((expanded) => !expanded)
-                  }
-                  className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left hover:bg-muted/40"
+                </div>
+                <span className="text-sm tabular-nums text-muted-foreground">
+                  {downloadProgress}%
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleCancelDownload}
+                  className="h-8 px-3 text-xs"
                 >
-                  {isBatchHistoryExpanded ? (
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  )}
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">
-                      {videoTitle || "Bilibili 批量下载"}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      批量任务 · 共 {batchDownloadItems.length} 个 · 完成{" "}
-                      {completedBatchCount} 个
-                      {failedBatchCount > 0
-                        ? ` · 失败 ${failedBatchCount} 个`
-                        : ""}
-                    </p>
-                  </div>
-                  <div className="flex min-w-32 flex-col items-end gap-1">
-                    <span
-                      className={cn(
-                        "text-xs",
-                        batchStatus === "completed" && "text-emerald-600",
-                        batchStatus === "failed" && "text-destructive",
-                        ["queued", "downloading"].includes(batchStatus) &&
-                          "text-muted-foreground",
-                      )}
-                    >
-                      {batchStatusLabel(batchStatus)}
-                    </span>
-                    <div className="flex w-full items-center gap-2">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className={cn(
-                            "h-full rounded-full transition-all duration-300",
-                            batchStatus === "failed"
-                              ? "bg-destructive"
-                              : "bg-primary",
-                          )}
-                          style={{ width: `${batchOverallProgress}%` }}
-                        />
-                      </div>
-                      <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">
-                        {batchOverallProgress}%
-                      </span>
-                    </div>
-                  </div>
-                </button>
-
-                {isBatchHistoryExpanded && (
-                  <div className="border-t border-border bg-muted/10">
-                    {batchDownloadItems.map((item, index) => (
-                      <div
-                        key={item.id}
-                        className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
-                      >
-                        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                          {index + 1}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="min-w-0 flex-1 truncate text-sm">
-                              {item.title}
-                            </p>
-                            <span
-                              className={cn(
-                                "shrink-0 text-xs",
-                                item.status === "completed" &&
-                                  "text-emerald-600",
-                                item.status === "failed" &&
-                                  "text-destructive",
-                                ["queued", "parsing", "downloading"].includes(
-                                  item.status,
-                                ) && "text-muted-foreground",
-                              )}
-                            >
-                              {batchStatusLabel(item.status)}
-                            </span>
-                          </div>
-                          <div className="mt-2 flex items-center gap-2">
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                              <div
-                                className={cn(
-                                  "h-full rounded-full transition-all duration-300",
-                                  item.status === "failed"
-                                    ? "bg-destructive"
-                                    : "bg-primary",
-                                )}
-                                style={{ width: `${item.progress}%` }}
-                              />
-                            </div>
-                            <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                              {item.progress}%
-                            </span>
-                            {item.speed > 0 && (
-                              <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                                {(item.speed / 1024 / 1024).toFixed(1)}MB/s
-                              </span>
-                            )}
-                          </div>
-                          {item.error && (
-                            <p className="mt-1 truncate text-xs text-destructive">
-                              {item.error}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                  取消
+                </Button>
               </div>
-            )}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center flex-1">
-            <div className="w-full max-w-4xl">
-              {/* 输入框 */}
-              <div className="sticky top-0 z-30 bg-background/95 py-2 backdrop-blur-md">
-                <div className="relative">
-                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/50" />
-                  <Input
-                    value={downloadUrl}
-                    onChange={(e) => setDownloadUrl(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={t(`download.urlPlaceholder.${activeSource}`, {
-                      defaultValue: downloadPlaceholder,
-                    })}
-                    className="w-full h-14 pl-11 pr-5 text-base rounded-2xl border border-border bg-background/60 shadow-none focus:ring-0 focus:border-border focus:shadow-none"
+              <div className="mt-3 flex items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${downloadProgress}%` }}
                   />
                 </div>
-              </div>
-
-              {/* 解析 Loading */}
-              {parseStatus === "parsing" && (
-                <div className="flex items-center justify-center gap-2 py-2 animate-fade-in">
-                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  <span className="text-sm text-muted-foreground">
-                    正在解析视频...
+                {downloadSpeed > 0 && (
+                  <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                    {(downloadSpeed / 1024 / 1024).toFixed(1)}MB/s
                   </span>
-                </div>
+                )}
+              </div>
+              {downloadError && (
+                <p className="mt-2 text-xs text-destructive">{downloadError}</p>
               )}
+            </div>
+          )}
 
-              {parseStatus === "success" &&
-                activeSource === "bilibili" &&
-                (videoLoginRequired || videoMessage) &&
-                videoFormats.length === 0 && (
-                  <div className="mt-3 rounded-xl border border-border bg-muted/30 p-4 animate-fade-in">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground">
-                          {videoKind === "charging_collection"
-                            ? "Bilibili 权限内容"
-                            : "Bilibili"}
-                        </p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          {videoMessage ||
-                            "该内容需要登录后检查账号是否拥有观看权限。"}
-                        </p>
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={() => void handleOpenBilibiliLogin()}
-                        className="shrink-0"
-                      >
-                        扫码登录
-                      </Button>
-                    </div>
-                  </div>
+          {batchDownloadItems.length > 0 && (
+            <div className="overflow-hidden rounded-xl border border-border bg-background">
+              <button
+                type="button"
+                onClick={() =>
+                  setIsBatchHistoryExpanded((expanded) => !expanded)
+                }
+                className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left hover:bg-muted/40"
+              >
+                {isBatchHistoryExpanded ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
                 )}
-
-              {parseStatus === "success" &&
-                activeSource === "bilibili" &&
-                videoItems.length > 0 && (
-                  <div className="mt-3 animate-fade-in space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {videoTitle}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {videoKind === "multipart"
-                            ? `多 P 视频 · ${videoItems.length} 个分集`
-                            : `合集 · ${videoItems.length} 个视频`}
-                          {bilibiliStatus?.logged_in
-                            ? ` · 已登录 ${bilibiliStatus.username || ""}`
-                            : ""}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setSelectedVideoItems(
-                              selectedVideoItems.length === videoItems.length
-                                ? []
-                                : videoItems.map((item) => item.id),
-                            )
-                          }
-                        >
-                          {selectedVideoItems.length === videoItems.length
-                            ? "取消全选"
-                            : "全选"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => void handleStartBilibiliBatchDownload()}
-                          disabled={
-                            selectedVideoItems.length === 0 ||
-                            activeBatchCount > 0
-                          }
-                        >
-                          {activeBatchCount > 0 ? "下载中" : "批量下载"}
-                        </Button>
-                      </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">
+                    {videoTitle || "Bilibili 批量下载"}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    批量任务 · 共 {batchDownloadItems.length} 个 · 完成{" "}
+                    {completedBatchCount} 个
+                    {failedBatchCount > 0
+                      ? ` · 失败 ${failedBatchCount} 个`
+                      : ""}
+                  </p>
+                </div>
+                <div className="flex min-w-32 flex-col items-end gap-1">
+                  <span
+                    className={cn(
+                      "text-xs",
+                      batchStatus === "completed" && "text-emerald-600",
+                      batchStatus === "failed" && "text-destructive",
+                      ["queued", "downloading"].includes(batchStatus) &&
+                        "text-muted-foreground",
+                    )}
+                  >
+                    {batchStatusLabel(batchStatus)}
+                  </span>
+                  <div className="flex w-full items-center gap-2">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-all duration-300",
+                          batchStatus === "failed"
+                            ? "bg-destructive"
+                            : "bg-primary",
+                        )}
+                        style={{ width: `${batchOverallProgress}%` }}
+                      />
                     </div>
-                    <div className="max-h-[calc(100vh-280px)] overflow-y-auto rounded-xl border border-border">
-                      {videoItems.map((item, index) => {
-                        const checked = selectedVideoItems.includes(item.id);
-                        return (
-                          <label
-                            key={item.id}
-                            className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/40"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(event) => {
-                                setSelectedVideoItems((prev) =>
-                                  event.target.checked
-                                    ? Array.from(new Set([...prev, item.id]))
-                                    : prev.filter((id) => id !== item.id),
-                                );
-                              }}
-                              className="h-4 w-4"
-                            />
-                            <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                              {index + 1}
-                            </span>
-                            <span className="min-w-0 flex-1 truncate text-sm">
-                              {item.title}
-                            </span>
-                            {item.duration ? (
-                              <span className="shrink-0 text-xs text-muted-foreground">
-                                {Math.floor(item.duration / 60)}:
-                                {String(item.duration % 60).padStart(2, "0")}
-                              </span>
-                            ) : null}
-                          </label>
-                        );
-                      })}
-                    </div>
+                    <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">
+                      {batchOverallProgress}%
+                    </span>
                   </div>
-                )}
+                </div>
+              </button>
 
-              {/* 视频预览 */}
-              {parseStatus === "success" && videoFormats.length > 0 && (
-                <div className="animate-fade-in space-y-3">
-                  {/* 视频容器：悬浮时显示下载按钮 */}
-                  <div className="relative group flex w-full justify-center overflow-hidden rounded-xl bg-black">
-                    <video
-                      key={`${selectedFormatIdx}-${previewVideoUrl}`}
-                      src={previewVideoUrl}
-                      controls
-                      poster={videoCover || undefined}
-                      className="h-auto max-h-[calc(100vh-220px)] w-full rounded-xl object-contain"
-                    />
-                    {/* 悬浮下载按钮 / 进度 */}
-                    <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-end gap-2">
-                      {downloadTaskId ? (
-                        <Button
-                          size="sm"
-                          disabled
-                          className="bg-black/70 backdrop-blur-sm text-white border-0 gap-1.5 shadow-lg disabled:opacity-100"
-                        >
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          下载中
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          onClick={handleStartDownload}
-                          className="bg-black/70 backdrop-blur-sm hover:bg-black/80 text-white border-0 gap-1.5 shadow-lg"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          下载视频
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      {videoTitle ? (
-                        <p className="min-w-0 truncate text-sm font-medium text-foreground">
-                          {videoTitle}
-                        </p>
-                      ) : (
-                        <span className="min-w-0" />
-                      )}
-                      {videoPlatformLabel && (
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          来源: {videoPlatformLabel}
-                        </span>
-                      )}
-                    </div>
-                    {videoFormats.length > 1 && (
-                      <div className="min-w-0">
+              {isBatchHistoryExpanded && (
+                <div className="border-t border-border bg-muted/10">
+                  {batchDownloadItems.map((item, index) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+                    >
+                      <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground">
-                            清晰度:
-                          </span>
-                          <select
-                            value={selectedFormatIdx}
-                            onChange={(e) =>
-                              setSelectedFormatIdx(Number(e.target.value))
-                            }
-                            className="text-xs bg-background border border-border rounded-md px-2 py-1 outline-none focus:border-primary"
+                          <p className="min-w-0 flex-1 truncate text-sm">
+                            {item.title}
+                          </p>
+                          <span
+                            className={cn(
+                              "shrink-0 text-xs",
+                              item.status === "completed" && "text-emerald-600",
+                              item.status === "failed" && "text-destructive",
+                              ["queued", "parsing", "downloading"].includes(
+                                item.status,
+                              ) && "text-muted-foreground",
+                            )}
                           >
-                            {videoFormats.map((fmt, idx) => (
-                              <option key={idx} value={idx}>
-                                {fmt.quality}
-                              </option>
-                            ))}
-                          </select>
+                            {batchStatusLabel(item.status)}
+                          </span>
                         </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className={cn(
+                                "h-full rounded-full transition-all duration-300",
+                                item.status === "failed"
+                                  ? "bg-destructive"
+                                  : "bg-primary",
+                              )}
+                              style={{ width: `${item.progress}%` }}
+                            />
+                          </div>
+                          <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                            {item.progress}%
+                          </span>
+                          {item.speed > 0 && (
+                            <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                              {(item.speed / 1024 / 1024).toFixed(1)}MB/s
+                            </span>
+                          )}
+                        </div>
+                        {item.error && (
+                          <p className="mt-1 truncate text-xs text-destructive">
+                            {item.error}
+                          </p>
+                        )}
                       </div>
-                    )}
-
-                    {downloadError && (
-                      <p className="text-xs text-destructive">
-                        {downloadError}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {parseStatus === "error" && (
-                <div className="text-center text-sm text-destructive py-2">
-                  解析失败，请检查链接是否正确
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
+          )}
+        </div>
+
+        <div
+          className={cn(
+            "flex-col items-center flex-1",
+            !showSettings && !showHistory
+              ? "flex"
+              : "pointer-events-none absolute inset-x-6 top-0 flex opacity-0",
+          )}
+        >
+          <div className="w-full max-w-4xl">
+            {/* 输入框 */}
+            <div className="sticky top-0 z-30 bg-background/95 py-2 backdrop-blur-md">
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/50" />
+                <Input
+                  value={downloadUrl}
+                  onChange={(e) => handleDownloadUrlChange(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={t(`download.urlPlaceholder.${activeSource}`, {
+                    defaultValue: downloadPlaceholder,
+                  })}
+                  className={cn(
+                    "w-full h-14 pl-11 text-base rounded-2xl border border-border bg-background/60 shadow-none focus:ring-0 focus:border-border focus:shadow-none",
+                    activeSource === "m3u8" ? "pr-28" : "pr-5",
+                  )}
+                />
+                {activeSource === "m3u8" && (
+                  <Button
+                    type="button"
+                    variant={m3u8CurlHeaderCount > 0 ? "secondary" : "ghost"}
+                    size="sm"
+                    onClick={() => setIsCurlDialogOpen(true)}
+                    title="设置 M3U8 cURL"
+                    className="absolute right-2 top-1/2 h-10 -translate-y-1/2 gap-1.5 rounded-xl px-3"
+                  >
+                    <FileText className="h-4 w-4" />
+                    <span className="text-xs">
+                      {m3u8CurlHeaderCount > 0 ? m3u8CurlHeaderCount : "cURL"}
+                    </span>
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {/* 解析 Loading */}
+            {parseStatus === "parsing" && (
+              <div className="flex items-center justify-center gap-2 py-2 animate-fade-in">
+                <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-muted-foreground">
+                  正在解析视频...
+                </span>
+              </div>
+            )}
+
+            {parseStatus === "success" &&
+              activeSource === "bilibili" &&
+              (videoLoginRequired || videoMessage) &&
+              videoFormats.length === 0 && (
+                <div className="mt-3 rounded-xl border border-border bg-muted/30 p-4 animate-fade-in">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">
+                        {videoKind === "charging_collection"
+                          ? "Bilibili 权限内容"
+                          : "Bilibili"}
+                      </p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {videoMessage ||
+                          "该内容需要登录后检查账号是否拥有观看权限。"}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => void handleOpenBilibiliLogin()}
+                      className="shrink-0"
+                    >
+                      扫码登录
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+            {parseStatus === "success" &&
+              activeSource === "bilibili" &&
+              videoItems.length > 0 && (
+                <div className="mt-3 animate-fade-in space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {videoTitle}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {videoKind === "multipart"
+                          ? `多 P 视频 · ${videoItems.length} 个分集`
+                          : `合集 · ${videoItems.length} 个视频`}
+                        {bilibiliStatus?.logged_in
+                          ? ` · 已登录 ${bilibiliStatus.username || ""}`
+                          : ""}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setSelectedVideoItems(
+                            selectedVideoItems.length === videoItems.length
+                              ? []
+                              : videoItems.map((item) => item.id),
+                          )
+                        }
+                      >
+                        {selectedVideoItems.length === videoItems.length
+                          ? "取消全选"
+                          : "全选"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => void handleStartBilibiliBatchDownload()}
+                        disabled={
+                          selectedVideoItems.length === 0 ||
+                          activeBatchCount > 0
+                        }
+                      >
+                        {activeBatchCount > 0 ? "下载中" : "批量下载"}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="max-h-[calc(100vh-280px)] overflow-y-auto rounded-xl border border-border">
+                    {videoItems.map((item, index) => {
+                      const checked = selectedVideoItems.includes(item.id);
+                      return (
+                        <label
+                          key={item.id}
+                          className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/40"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(event) => {
+                              setSelectedVideoItems((prev) =>
+                                event.target.checked
+                                  ? Array.from(new Set([...prev, item.id]))
+                                  : prev.filter((id) => id !== item.id),
+                              );
+                            }}
+                            className="h-4 w-4"
+                          />
+                          <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                            {index + 1}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate text-sm">
+                            {item.title}
+                          </span>
+                          {item.duration ? (
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {Math.floor(item.duration / 60)}:
+                              {String(item.duration % 60).padStart(2, "0")}
+                            </span>
+                          ) : null}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+            {/* 视频预览 */}
+            {parseStatus === "success" && videoFormats.length > 0 && (
+              <div className="animate-fade-in space-y-3">
+                {/* 视频容器：悬浮时显示下载按钮 */}
+                <div className="relative group flex w-full justify-center overflow-hidden rounded-xl bg-black">
+                  <video
+                    ref={previewVideoRef}
+                    key={`${selectedFormatIdx}-${previewVideoUrl}`}
+                    src={previewVideoUrl}
+                    controls
+                    poster={videoCover || undefined}
+                    className="h-auto max-h-[calc(100vh-220px)] w-full rounded-xl object-contain"
+                  />
+                  {/* 悬浮下载按钮 / 进度 */}
+                  <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-end gap-2">
+                    {downloadTaskId ? (
+                      <Button
+                        size="sm"
+                        disabled
+                        className="bg-black/70 backdrop-blur-sm text-white border-0 gap-1.5 shadow-lg disabled:opacity-100"
+                      >
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        下载中
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        onClick={handleStartDownload}
+                        className="bg-black/70 backdrop-blur-sm hover:bg-black/80 text-white border-0 gap-1.5 shadow-lg"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        下载视频
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    {videoTitle ? (
+                      <p className="min-w-0 truncate text-sm font-medium text-foreground">
+                        {videoTitle}
+                      </p>
+                    ) : (
+                      <span className="min-w-0" />
+                    )}
+                    {videoPlatformLabel && (
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        来源: {videoPlatformLabel}
+                      </span>
+                    )}
+                  </div>
+                  {videoFormats.length > 1 && (
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          清晰度:
+                        </span>
+                        <select
+                          value={selectedFormatIdx}
+                          onChange={(e) =>
+                            setSelectedFormatIdx(Number(e.target.value))
+                          }
+                          className="text-xs bg-background border border-border rounded-md px-2 py-1 outline-none focus:border-primary"
+                        >
+                          {videoFormats.map((fmt, idx) => (
+                            <option key={idx} value={idx}>
+                              {fmt.quality}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {downloadError && (
+                    <p className="text-xs text-destructive">{downloadError}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {parseStatus === "error" && (
+              <div className="text-center text-sm text-destructive py-2">
+                解析失败，请检查链接是否正确
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </main>
     </div>
   );

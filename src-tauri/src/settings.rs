@@ -50,7 +50,11 @@ impl Default for AppSettings {
 
 impl AppSettings {
     fn settings_path() -> Option<PathBuf> {
-        Some(crate::config::get_home_dir().join(".videor").join("settings.json"))
+        Some(
+            crate::config::get_home_dir()
+                .join(".videor")
+                .join("settings.json"),
+        )
     }
 
     fn normalize_paths(&mut self) {
@@ -161,6 +165,3 @@ pub fn update_settings(new_settings: AppSettings) -> Result<(), AppError> {
     *guard = new_settings;
     Ok(())
 }
-
-
-

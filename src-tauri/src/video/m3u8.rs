@@ -1,4 +1,7 @@
-use super::{VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser};
+use super::{
+    header_map_to_hash_map, stream_proxy, VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser,
+};
+use reqwest::header::HeaderMap;
 
 pub struct M3u8Parser;
 
@@ -17,9 +20,26 @@ impl VideoParser for M3u8Parser {
     }
 
     async fn parse(&self, url: &str, client: &reqwest::Client) -> Result<VideoInfo, String> {
-        let playlist = fetch_playlist(client, url).await?;
+        self.parse_with_headers(url, client, None).await
+    }
+
+    async fn parse_with_headers(
+        &self,
+        url: &str,
+        client: &reqwest::Client,
+        headers: Option<&HeaderMap>,
+    ) -> Result<VideoInfo, String> {
+        let playlist = fetch_playlist(client, url, headers).await?;
         let variants = parse_master_variants(url, &playlist)?;
         let duration = parse_media_duration(&playlist);
+        let format_headers = headers.map(header_map_to_hash_map).unwrap_or_default();
+        let preview_url = if format_headers.is_empty() {
+            url.to_string()
+        } else {
+            stream_proxy::proxy_hls_url_for(url, &format_headers)
+                .await
+                .unwrap_or_else(|_| url.to_string())
+        };
         let title = url
             .split('/')
             .last()
@@ -33,9 +53,10 @@ impl VideoParser for M3u8Parser {
             vec![VideoFormat {
                 quality: "原始 M3U8".to_string(),
                 url: url.to_string(),
-                preview_url: Some(url.to_string()),
+                preview_url: Some(preview_url),
                 audio_url: None,
                 size: None,
+                headers: format_headers.clone(),
             }]
         } else {
             variants
@@ -43,9 +64,10 @@ impl VideoParser for M3u8Parser {
                 .map(|variant| VideoFormat {
                     quality: variant_quality(&variant),
                     url: variant.uri,
-                    preview_url: None,
+                    preview_url: Some(preview_url.clone()),
                     audio_url: None,
                     size: None,
+                    headers: format_headers.clone(),
                 })
                 .collect()
         };
@@ -65,9 +87,16 @@ impl VideoParser for M3u8Parser {
     }
 }
 
-async fn fetch_playlist(client: &reqwest::Client, url: &str) -> Result<String, String> {
-    let text = client
-        .get(url)
+async fn fetch_playlist(
+    client: &reqwest::Client,
+    url: &str,
+    headers: Option<&HeaderMap>,
+) -> Result<String, String> {
+    let mut request = client.get(url);
+    if let Some(headers) = headers {
+        request = request.headers(headers.clone());
+    }
+    let text = request
         .send()
         .await
         .map_err(|e| format!("M3U8 请求失败: {e}"))?

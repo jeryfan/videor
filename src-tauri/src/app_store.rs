@@ -21,7 +21,6 @@ fn update_cached_override(value: Option<PathBuf>) {
     }
 }
 
-
 fn read_override_from_store(app: &tauri::AppHandle) -> Option<PathBuf> {
     let store = match app.store_builder("app_paths.json").build() {
         Ok(store) => store,

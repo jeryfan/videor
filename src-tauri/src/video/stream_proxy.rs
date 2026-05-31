@@ -10,11 +10,31 @@ use tokio::sync::OnceCell;
 
 const STREAM_CHUNK_SIZE: u64 = 1024 * 1024;
 static LOCAL_PROXY_PORT: OnceCell<u16> = OnceCell::const_new();
+static HLS_PROXY_CONTEXTS: OnceCell<tokio::sync::RwLock<HashMap<String, HashMap<String, String>>>> =
+    OnceCell::const_new();
 
 pub async fn proxy_url_for(upstream_url: &str) -> Result<String, String> {
     let port = ensure_local_http_proxy().await?;
     Ok(format!(
         "http://127.0.0.1:{port}/video?url={}",
+        percent_encode(upstream_url)
+    ))
+}
+
+pub async fn proxy_hls_url_for(
+    upstream_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<String, String> {
+    let port = ensure_local_http_proxy().await?;
+    let token = uuid::Uuid::new_v4().to_string();
+    hls_contexts()
+        .await
+        .write()
+        .await
+        .insert(token.clone(), headers.clone());
+    Ok(format!(
+        "http://127.0.0.1:{port}/hls?token={}&url={}",
+        percent_encode(&token),
         percent_encode(upstream_url)
     ))
 }
@@ -148,6 +168,18 @@ async fn handle_http_connection(mut stream: TcpStream) {
                 Err(error) => text_response(StatusCode::BAD_REQUEST, &error),
             }
         }
+        Ok((path, headers)) if path.starts_with("/hls?") => {
+            let token = query_value(&path, "token");
+            let url = query_value(&path, "url");
+            match (token, url) {
+                (Some(token), Some(url)) => {
+                    fetch_hls_resource(&token, &url, headers.get("range").map(String::as_str))
+                        .await
+                        .unwrap_or_else(|error| text_response(StatusCode::BAD_GATEWAY, &error))
+                }
+                _ => text_response(StatusCode::BAD_REQUEST, "missing hls token or url"),
+            }
+        }
         Ok(_) => text_response(StatusCode::NOT_FOUND, "not found"),
         Err(error) => text_response(StatusCode::BAD_REQUEST, &error),
     };
@@ -155,6 +187,121 @@ async fn handle_http_connection(mut stream: TcpStream) {
     let bytes = http_response_bytes(response);
     let _ = stream.write_all(&bytes).await;
     let _ = stream.shutdown().await;
+}
+
+async fn fetch_hls_resource(
+    token: &str,
+    url: &str,
+    range: Option<&str>,
+) -> Result<Response<Vec<u8>>, String> {
+    if !url.starts_with("https://") {
+        return Ok(text_response(StatusCode::FORBIDDEN, "unsupported hls url"));
+    }
+
+    let headers = hls_contexts()
+        .await
+        .read()
+        .await
+        .get(token)
+        .cloned()
+        .ok_or_else(|| "hls context expired".to_string())?;
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(url);
+    for (name, value) in headers {
+        req = req.header(name, value);
+    }
+    if let Some(range) = range {
+        req = req.header(RANGE, range);
+    }
+
+    let upstream = req.send().await.map_err(|e| e.to_string())?;
+    let status = upstream.status();
+    let upstream_headers = upstream.headers().clone();
+    let body = upstream.bytes().await.map_err(|e| e.to_string())?.to_vec();
+    let is_playlist = url.contains(".m3u8") || body.starts_with(b"#EXTM3U");
+
+    let (body, content_type) = if is_playlist {
+        let playlist = String::from_utf8_lossy(&body);
+        (
+            rewrite_hls_playlist(token, url, &playlist)?.into_bytes(),
+            "application/vnd.apple.mpegurl".to_string(),
+        )
+    } else {
+        let content_type = upstream_headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.eq_ignore_ascii_case("image/jpeg"))
+            .unwrap_or("video/mp2t")
+            .to_string();
+        (body, content_type)
+    };
+
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK))
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, body.len().to_string());
+
+    if let Some(value) = upstream_headers
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+    {
+        builder = builder.header(header::CONTENT_RANGE, value);
+    }
+
+    Ok(builder.body(body).unwrap_or_else(|_| {
+        text_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to build response",
+        )
+    }))
+}
+
+fn rewrite_hls_playlist(token: &str, base_url: &str, playlist: &str) -> Result<String, String> {
+    let port = LOCAL_PROXY_PORT
+        .get()
+        .copied()
+        .ok_or_else(|| "local proxy is not ready".to_string())?;
+    let base = url::Url::parse(base_url).map_err(|e| format!("invalid hls base url: {e}"))?;
+    let mut output = String::new();
+
+    for line in playlist.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            output.push_str(line);
+        } else {
+            let absolute = base
+                .join(trimmed)
+                .map_err(|e| format!("invalid hls segment url: {e}"))?;
+            output.push_str(&format!(
+                "http://127.0.0.1:{port}/hls?token={}&url={}",
+                percent_encode(token),
+                percent_encode(absolute.as_str())
+            ));
+        }
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
+async fn hls_contexts() -> &'static tokio::sync::RwLock<HashMap<String, HashMap<String, String>>> {
+    HLS_PROXY_CONTEXTS
+        .get_or_init(|| async { tokio::sync::RwLock::new(HashMap::new()) })
+        .await
+}
+
+fn query_value(path: &str, key: &str) -> Option<String> {
+    path.split_once('?').and_then(|(_, query)| {
+        query
+            .split('&')
+            .find_map(|pair| pair.strip_prefix(&format!("{key}=")).map(percent_decode))
+    })
 }
 
 async fn read_http_request(

@@ -16,7 +16,6 @@ static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
 /// 当前代理 URL（用于日志和状态查询）
 static CURRENT_PROXY_URL: OnceCell<RwLock<Option<String>>> = OnceCell::new();
 
-
 /// 初始化全局 HTTP 客户端
 ///
 /// 应在应用启动时调用一次。
@@ -284,4 +283,3 @@ pub fn mask_url(url: &str) -> String {
         }
     }
 }
-

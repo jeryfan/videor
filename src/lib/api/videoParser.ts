@@ -6,6 +6,7 @@ export interface VideoFormat {
   preview_url?: string;
   audio_url?: string;
   size?: number;
+  headers?: Record<string, string>;
 }
 
 export type VideoKind =
@@ -42,7 +43,16 @@ export interface VideoInfo {
  * 解析视频链接（支持抖音、B站、直链）
  * @param input 视频链接或分享文本
  */
-export async function parseVideo(input: string): Promise<VideoInfo> {
+export async function parseVideo(
+  input: string,
+  rawCurl?: string,
+): Promise<VideoInfo> {
+  if (rawCurl?.trim()) {
+    return await invoke<VideoInfo>("parse_video_with_curl", {
+      input,
+      rawCurl,
+    });
+  }
   return await invoke<VideoInfo>("parse_video", { input });
 }
 
@@ -70,7 +80,7 @@ export async function generateBilibiliLoginQr(): Promise<BilibiliLoginQr> {
 }
 
 export async function pollBilibiliLoginQr(
-  qrcodeKey: string
+  qrcodeKey: string,
 ): Promise<BilibiliLoginPoll> {
   return await invoke<BilibiliLoginPoll>("bilibili_login_qr_poll", {
     qrcodeKey,

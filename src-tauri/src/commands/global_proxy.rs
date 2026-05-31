@@ -105,10 +105,7 @@ pub async fn test_proxy_url(url: String) -> Result<ProxyTestResult, String> {
 
     // 使用多个测试目标，提高兼容性
     // 优先使用 httpbin（专门用于 HTTP 测试），回退到其他公共端点
-    let test_urls = [
-        "https://httpbin.org/get",
-        "https://www.google.com",
-    ];
+    let test_urls = ["https://httpbin.org/get", "https://www.google.com"];
 
     let mut last_error = None;
 

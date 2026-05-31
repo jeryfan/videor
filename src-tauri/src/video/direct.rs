@@ -31,6 +31,7 @@ impl VideoParser for DirectParser {
                 preview_url: None,
                 audio_url: None,
                 size: None,
+                headers: Default::default(),
             }],
             kind: VideoKind::Video,
             items: Vec::<VideoItem>::new(),

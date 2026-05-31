@@ -596,6 +596,7 @@ async fn fetch_play_formats(
                     preview_url: preview_url.clone(),
                     audio_url: audio_url.clone(),
                     size: best_video.get("size").and_then(|v| v.as_u64()),
+                    headers: Default::default(),
                 });
             }
         }
@@ -611,6 +612,7 @@ async fn fetch_play_formats(
                         preview_url: Some(url.to_string()),
                         audio_url: None,
                         size: durl.get("size").and_then(|v| v.as_u64()),
+                        headers: Default::default(),
                     });
                 }
             }

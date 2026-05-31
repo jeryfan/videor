@@ -24,6 +24,7 @@ impl VideoParser for DouyinParser {
                     preview_url: None,
                     audio_url: None,
                     size: None,
+                    headers: Default::default(),
                 }],
                 kind: VideoKind::Video,
                 items: Vec::<VideoItem>::new(),
@@ -144,6 +145,7 @@ async fn fetch_via_mobile_share(
                     preview_url: None,
                     audio_url: None,
                     size: None,
+                    headers: Default::default(),
                 });
             }
         }
@@ -168,6 +170,7 @@ async fn fetch_via_mobile_share(
                         preview_url: None,
                         audio_url: None,
                         size: None,
+                        headers: Default::default(),
                     });
                 }
             }

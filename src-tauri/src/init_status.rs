@@ -24,5 +24,3 @@ pub fn set_init_error(payload: InitErrorPayload) {
 pub fn get_init_error() -> Option<InitErrorPayload> {
     cell().read().ok()?.clone()
 }
-
-

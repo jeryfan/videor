@@ -1,6 +1,6 @@
 use crate::video::bilibili;
 use crate::video::downloader::DownloadManager;
-use crate::video::{parse_video_url, VideoFormat, VideoInfo};
+use crate::video::{parse_video_url, parse_video_url_with_curl, VideoFormat, VideoInfo};
 use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri::Manager;
@@ -23,6 +23,15 @@ pub async fn parse_video(input: String) -> Result<VideoInfo, String> {
         input.chars().take(100).collect::<String>()
     );
     parse_video_url(&input).await
+}
+
+#[tauri::command]
+pub async fn parse_video_with_curl(input: String, raw_curl: String) -> Result<VideoInfo, String> {
+    log::info!(
+        "[VideoCommand] Parsing with cURL: {}",
+        input.chars().take(100).collect::<String>()
+    );
+    parse_video_url_with_curl(&input, &raw_curl).await
 }
 
 #[tauri::command]

@@ -38,7 +38,6 @@ fn get_crash_log_path() -> PathBuf {
     get_app_config_dir().join("crash.log")
 }
 
-
 /// 安全获取环境信息（不会 panic）
 fn get_system_info() -> String {
     let os = std::env::consts::OS;
