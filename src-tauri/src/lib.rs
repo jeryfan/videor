@@ -509,6 +509,8 @@ pub fn run() {
             commands::bilibili_login_qr_poll,
             commands::bilibili_login_status,
             commands::bilibili_logout,
+            commands::get_ffmpeg_status,
+            commands::open_ffmpeg_install_page,
             // Video downloader
             commands::start_video_download,
             commands::cancel_video_download,

@@ -5,8 +5,8 @@ pub struct DirectParser;
 #[async_trait::async_trait]
 impl VideoParser for DirectParser {
     fn can_handle(&self, url: &str) -> bool {
-        let video_ext_regex = regex::Regex::new(r"\.(mp4|webm|ogg|mov|m3u8)(\?.*)?$").unwrap();
-        video_ext_regex.is_match(url) || url.contains(".m3u8")
+        let video_ext_regex = regex::Regex::new(r"\.(mp4|webm|ogg|mov)(\?.*)?$").unwrap();
+        video_ext_regex.is_match(url)
     }
 
     async fn parse(&self, url: &str, _client: &reqwest::Client) -> Result<VideoInfo, String> {

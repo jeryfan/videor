@@ -4,6 +4,14 @@ use crate::video::{parse_video_url, VideoFormat, VideoInfo};
 use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri::Manager;
+use tauri_plugin_opener::OpenerExt;
+
+#[derive(Debug, serde::Serialize)]
+pub struct FfmpegStatus {
+    pub installed: bool,
+    pub path: Option<String>,
+    pub version: Option<String>,
+}
 
 /// 解析视频链接（支持抖音、B站、直链）
 ///
@@ -41,6 +49,61 @@ pub async fn bilibili_login_status() -> Result<bilibili::BilibiliLoginStatus, St
 pub async fn bilibili_logout() -> Result<(), String> {
     let client = crate::video::create_http_client();
     bilibili::logout(&client).await
+}
+
+#[tauri::command]
+pub async fn get_ffmpeg_status() -> Result<FfmpegStatus, String> {
+    let output = tokio::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .await;
+
+    let Ok(output) = output else {
+        return Ok(FfmpegStatus {
+            installed: false,
+            path: None,
+            version: None,
+        });
+    };
+
+    if !output.status.success() {
+        return Ok(FfmpegStatus {
+            installed: false,
+            path: None,
+            version: None,
+        });
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .map(str::to_string);
+    let path = tokio::process::Command::new("which")
+        .arg("ffmpeg")
+        .output()
+        .await
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|path| !path.is_empty());
+
+    Ok(FfmpegStatus {
+        installed: true,
+        path,
+        version,
+    })
+}
+
+#[tauri::command]
+pub async fn open_ffmpeg_install_page(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("https://ffmpeg.org/download.html", None::<String>)
+        .map_err(|e| format!("打开 ffmpeg 安装页面失败: {e}"))
 }
 
 /// 开始下载视频

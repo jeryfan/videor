@@ -2,9 +2,10 @@ use super::VideoFormat;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -84,14 +85,8 @@ impl DownloadManager {
         let task_id_clone = task_id.clone();
 
         tokio::spawn(async move {
-            let result = do_download(
-                &app,
-                &task_id_clone,
-                &format,
-                &final_path,
-                &cancel_token,
-            )
-            .await;
+            let result =
+                do_download(&app, &task_id_clone, &format, &final_path, &cancel_token).await;
 
             // 清理任务
             {
@@ -154,7 +149,9 @@ async fn do_download(
         .build()
         .map_err(|e| e.to_string())?;
 
-    if let Some(audio_url) = &format.audio_url {
+    if is_m3u8_url(&format.url) {
+        download_hls_with_ffmpeg(app, task_id, &format.url, save_path, cancel_token).await?;
+    } else if let Some(audio_url) = &format.audio_url {
         // DASH 格式：分别下载视频和音频，然后合并
         let video_tmp = save_path.with_extension("video.tmp");
         let audio_tmp = save_path.with_extension("audio.tmp");
@@ -166,14 +163,18 @@ async fn do_download(
         let mux_result = tokio::process::Command::new("ffmpeg")
             .args([
                 "-y",
-                "-i", video_tmp.to_str().unwrap_or_default(),
-                "-i", audio_tmp.to_str().unwrap_or_default(),
-                "-c", "copy",
-                "-movflags", "+faststart",
+                "-i",
+                video_tmp.to_str().unwrap_or_default(),
+                "-i",
+                audio_tmp.to_str().unwrap_or_default(),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
                 save_path.to_str().unwrap_or_default(),
             ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .await;
 
@@ -184,7 +185,8 @@ async fn do_download(
             Ok(status) if status.success() => {}
             _ => {
                 // ffmpeg 不可用或失败：只保留视频流
-                download_stream(app, task_id, &client, &format.url, save_path, cancel_token).await?;
+                download_stream(app, task_id, &client, &format.url, save_path, cancel_token)
+                    .await?;
             }
         }
     } else {
@@ -209,7 +211,9 @@ async fn download_stream(
         (url.to_string(), Some("https://www.bilibili.com/"))
     } else {
         // 抖音等非B站URL：手动解析302获取CDN直链
-        let resolved = resolve_cdn_url(url).await.unwrap_or_else(|_| url.to_string());
+        let resolved = resolve_cdn_url(url)
+            .await
+            .unwrap_or_else(|_| url.to_string());
         (resolved, None)
     };
 
@@ -304,6 +308,135 @@ async fn download_stream(
     }
 
     Ok(())
+}
+
+async fn download_hls_with_ffmpeg(
+    app: &AppHandle,
+    task_id: &str,
+    url: &str,
+    save_path: &PathBuf,
+    cancel_token: &CancellationToken,
+) -> Result<(), String> {
+    let total_duration_us = probe_hls_duration_us(url).await;
+    let mut child = tokio::process::Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-user_agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "-protocol_whitelist",
+            "file,http,https,tcp,tls,crypto",
+            "-i",
+            url,
+            "-c",
+            "copy",
+            "-bsf:a",
+            "aac_adtstoasc",
+            "-movflags",
+            "+faststart",
+            "-progress",
+            "pipe:1",
+            "-nostats",
+            save_path.to_str().unwrap_or_default(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 ffmpeg 下载 M3U8 失败: {e}"))?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "无法读取 ffmpeg 进度输出".to_string())?;
+    let mut lines = BufReader::new(stdout).lines();
+    let mut last_out_us = 0_u64;
+    let mut last_report = tokio::time::Instant::now();
+
+    loop {
+        tokio::select! {
+            _ = cancel_token.cancelled() => {
+                let _ = child.kill().await;
+                let _ = tokio::fs::remove_file(save_path).await;
+                let _ = app.emit(
+                    "video-download-progress",
+                    DownloadProgress {
+                        task_id: task_id.to_string(),
+                        downloaded: last_out_us,
+                        total: total_duration_us,
+                        speed: 0,
+                        status: DownloadStatus::Cancelled,
+                    },
+                );
+                return Err("下载已取消".to_string());
+            }
+            line = lines.next_line() => {
+                match line {
+                    Ok(Some(line)) => {
+                        if let Some(value) = line.strip_prefix("out_time_ms=") {
+                            if let Ok(out_us) = value.parse::<u64>() {
+                                last_out_us = out_us;
+                                let now = tokio::time::Instant::now();
+                                if now.duration_since(last_report) >= tokio::time::Duration::from_millis(500) {
+                                    let _ = app.emit(
+                                        "video-download-progress",
+                                        DownloadProgress {
+                                            task_id: task_id.to_string(),
+                                            downloaded: out_us,
+                                            total: total_duration_us,
+                                            speed: 0,
+                                            status: DownloadStatus::Downloading,
+                                        },
+                                    );
+                                    last_report = now;
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(error) => return Err(format!("读取 ffmpeg 进度失败: {error}")),
+                }
+            }
+        }
+    }
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("等待 ffmpeg 下载完成失败: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        let _ = tokio::fs::remove_file(save_path).await;
+        Err("ffmpeg 下载 M3U8 失败".to_string())
+    }
+}
+
+async fn probe_hls_duration_us(url: &str) -> Option<u64> {
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .ok()?;
+    let playlist = client.get(url).send().await.ok()?.text().await.ok()?;
+    let seconds = playlist
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("#EXTINF:"))
+        .filter_map(|value| value.split(',').next())
+        .filter_map(|value| value.parse::<f64>().ok())
+        .sum::<f64>();
+
+    if seconds > 0.0 {
+        Some((seconds * 1_000_000.0) as u64)
+    } else {
+        None
+    }
+}
+
+fn is_m3u8_url(url: &str) -> bool {
+    url.contains(".m3u8")
 }
 
 /// 预解析URL的302重定向，获取最终CDN直链

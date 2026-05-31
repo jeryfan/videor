@@ -2,6 +2,7 @@ pub mod bilibili;
 pub mod direct;
 pub mod douyin;
 pub mod downloader;
+pub mod m3u8;
 pub mod stream_proxy;
 
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,7 @@ pub async fn parse_video_url(input: &str) -> Result<VideoInfo, String> {
     let parsers: Vec<Box<dyn VideoParser>> = vec![
         Box::new(douyin::DouyinParser),
         Box::new(bilibili::BilibiliParser),
+        Box::new(m3u8::M3u8Parser),
         Box::new(direct::DirectParser),
     ];
 

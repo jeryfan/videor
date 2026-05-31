@@ -23,6 +23,7 @@ import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
 import { GlobalProxySettings } from "@/components/settings/GlobalProxySettings";
 import { DownloadDirectorySettings } from "@/components/settings/DownloadDirectorySettings";
+import { FfmpegSettings } from "@/components/settings/FfmpegSettings";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "react-i18next";
@@ -211,6 +212,7 @@ export function SettingsPage({
                       directory={settings.downloadDirectory}
                       onChange={handleAutoSave}
                     />
+                    <FfmpegSettings />
                   </motion.div>
                 ) : null}
               </TabsContent>
