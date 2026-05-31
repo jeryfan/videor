@@ -226,7 +226,38 @@ pub async fn login_status(client: &reqwest::Client) -> Result<BilibiliLoginStatu
     }
 }
 
-pub fn logout() -> Result<(), String> {
+pub async fn logout(client: &reqwest::Client) -> Result<(), String> {
+    let server_result = logout_server_session(client).await;
+    remove_cookie_store()?;
+    server_result
+}
+
+async fn logout_server_session(client: &reqwest::Client) -> Result<(), String> {
+    let cookie = load_cookie_header().unwrap_or_default();
+    if cookie.is_empty() {
+        return Ok(());
+    }
+
+    let csrf = load_cookie_value("bili_jct")?;
+    let Some(csrf) = csrf else {
+        return Ok(());
+    };
+
+    let resp: serde_json::Value = client
+        .post("https://passport.bilibili.com/login/exit/v2")
+        .headers(default_headers(Some(&cookie)))
+        .form(&[("biliCSRF", csrf.as_str())])
+        .send()
+        .await
+        .map_err(|e| format!("Bilibili 服务端退出登录失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("解析 Bilibili 服务端退出响应失败: {e}"))?;
+
+    ensure_code_ok(&resp)
+}
+
+fn remove_cookie_store() -> Result<(), String> {
     let path = cookie_store_path();
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| format!("清除 Bilibili 登录信息失败: {e}"))?;
@@ -748,6 +779,21 @@ pub fn load_cookie_header() -> Result<String, String> {
         .map(|c| format!("{}={}", c.name, c.value))
         .collect::<Vec<_>>()
         .join("; "))
+}
+
+fn load_cookie_value(name: &str) -> Result<Option<String>, String> {
+    let path = cookie_store_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = std::fs::read(&path).map_err(|e| format!("读取 Bilibili Cookie 失败: {e}"))?;
+    let store: BilibiliCookieStore =
+        serde_json::from_slice(&data).map_err(|e| format!("解析 Bilibili Cookie 失败: {e}"))?;
+    Ok(store
+        .cookies
+        .iter()
+        .find(|cookie| cookie.name == name)
+        .map(|cookie| cookie.value.clone()))
 }
 
 fn save_cookies_from_headers(headers: &HeaderMap) -> Result<(), String> {

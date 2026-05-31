@@ -39,7 +39,8 @@ pub async fn bilibili_login_status() -> Result<bilibili::BilibiliLoginStatus, St
 
 #[tauri::command]
 pub async fn bilibili_logout() -> Result<(), String> {
-    bilibili::logout()
+    let client = crate::video::create_http_client();
+    bilibili::logout(&client).await
 }
 
 /// 开始下载视频
