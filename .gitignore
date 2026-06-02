@@ -26,3 +26,5 @@ copilot-api
 .history
 CODEBUDDY.md
 mainWindow.js
+
+.playwright-mcp/
