@@ -48,6 +48,13 @@ import { settingsApi } from "@/lib/api";
 import type { Settings as AppSettings } from "@/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import {
+  getMatchedCurlEntry,
+  loadCurlImports,
+  saveCurlImports,
+  type CurlImportEntry,
+} from "@/lib/curlImport";
+import { CurlImportDialog } from "@/components/CurlImportDialog";
+import {
   parseVideo,
   generateBilibiliLoginQr,
   getBilibiliLoginStatus,
@@ -156,197 +163,6 @@ function sanitizePathSegment(value: string): string {
 function formatBatchItemTitle(index: number, title: string): string {
   const prefix = String(index + 1).padStart(2, "0");
   return `${prefix}.${sanitizePathSegment(title || "Bilibili视频")}`;
-}
-
-function extractUrlFromCurl(rawCurl: string): string | null {
-  const trimmed = rawCurl.trim();
-  if (!trimmed.startsWith("curl ")) return null;
-
-  const urlFlag = trimmed.match(/(?:^|\s)--url\s+(['"])(https?:\/\/.*?)\1/s);
-  if (urlFlag?.[2]) return urlFlag[2];
-
-  const quotedUrl = trimmed.match(/(?:^|\s)(['"])(https?:\/\/.*?)\1/s);
-  if (quotedUrl?.[2]) return quotedUrl[2];
-
-  const bareUrl = trimmed.match(/(?:^|\s)(https?:\/\/[^\s'"\\]+)/);
-  return bareUrl?.[1] ?? null;
-}
-
-function countUsableCurlHeaders(rawCurl: string): number {
-  if (!rawCurl.trim().startsWith("curl ")) return 0;
-
-  const blocked = new Set([
-    "host",
-    "authority",
-    "method",
-    "path",
-    "scheme",
-    "content-length",
-    "connection",
-    "transfer-encoding",
-    "accept-encoding",
-    "upgrade",
-    "proxy-connection",
-  ]);
-
-  return Array.from(
-    rawCurl.matchAll(/(?:^|\s)(?:-H|--header)\s+(['"])(.*?)\1/gs),
-  ).filter((match) => {
-    const header = match[2];
-    const separator = header.indexOf(":");
-    if (separator <= 0) return false;
-    const name = header.slice(0, separator).trim().toLowerCase();
-    const value = header.slice(separator + 1).trim();
-    return Boolean(name && value && !blocked.has(name));
-  }).length;
-}
-
-function extractDomainFromUrl(url: string): string | null {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return null;
-  }
-}
-
-function getMatchedCurlEntry(
-  url: string,
-  curlImports: CurlImportEntry[],
-): CurlImportEntry | undefined {
-  const domain = extractDomainFromUrl(url);
-  if (!domain) return undefined;
-
-  const exact = curlImports.find((e) => e.domain === domain);
-  if (exact) return exact;
-
-  const parts = domain.split(".");
-  for (let i = 1; i < parts.length - 1; i++) {
-    const parentDomain = parts.slice(i).join(".");
-    const parent = curlImports.find((e) => e.domain === parentDomain);
-    if (parent) return parent;
-  }
-
-  return undefined;
-}
-
-const CURL_IMPORTS_STORAGE_KEY = "videor-curl-imports";
-const CURL_FILL_URL_KEY = "videor-curl-fill-url";
-
-type InputFormat = "curl" | "keyValue";
-
-interface ParsedHeadersResult {
-  domain: string;
-  url: string;
-  rawCurl: string;
-  headerCount: number;
-}
-
-interface CurlImportEntry {
-  domain: string;
-  rawCurl: string;
-  headerCount: number;
-}
-
-function loadCurlImports(): CurlImportEntry[] {
-  try {
-    const raw = localStorage.getItem(CURL_IMPORTS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is CurlImportEntry =>
-        item &&
-        typeof item === "object" &&
-        typeof item.domain === "string" &&
-        typeof item.rawCurl === "string" &&
-        typeof item.headerCount === "number",
-    );
-  } catch {
-    return [];
-  }
-}
-
-function loadCurlFillUrlSetting(): boolean {
-  try {
-    return localStorage.getItem(CURL_FILL_URL_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function detectInputFormat(text: string): InputFormat {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("curl ")) return "curl";
-  return "keyValue";
-}
-
-function countKeyValueHeaders(text: string): number {
-  const blocked = new Set([
-    "host",
-    "authority",
-    "method",
-    "path",
-    "scheme",
-    "content-length",
-    "connection",
-    "transfer-encoding",
-    "accept-encoding",
-    "upgrade",
-    "proxy-connection",
-  ]);
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.includes(":"))
-    .filter((line) => {
-      const colonIdx = line.indexOf(":");
-      const name = line.slice(0, colonIdx).trim().toLowerCase();
-      const value = line.slice(colonIdx + 1).trim();
-      return name && value && !blocked.has(name);
-    }).length;
-}
-
-function buildCurlFromHeaders(text: string, url: string): string {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.includes(":"));
-  const headerArgs = lines
-    .map((line) => {
-      const colonIdx = line.indexOf(":");
-      const name = line.slice(0, colonIdx).trim();
-      const value = line.slice(colonIdx + 1).trim();
-      return `  -H '${name}: ${value}'`;
-    })
-    .join(" \\\n");
-  return `curl '${url}'${headerArgs ? " \\\n" + headerArgs : ""}`;
-}
-
-function parseHeadersInput(
-  text: string,
-  format: InputFormat,
-): ParsedHeadersResult | null {
-  const trimmed = text.trim();
-  if (!trimmed) return null;
-
-  if (format === "curl") {
-    const url = extractUrlFromCurl(trimmed);
-    if (!url) return null;
-    const domain = extractDomainFromUrl(url);
-    if (!domain) return null;
-    const headerCount = countUsableCurlHeaders(trimmed);
-    return { domain, url, rawCurl: trimmed, headerCount };
-  }
-
-  // keyValue format
-  const headerCount = countKeyValueHeaders(trimmed);
-  // keyValue 格式没有 URL，需要用户手动输入
-  return {
-    domain: "",
-    url: "",
-    rawCurl: trimmed,
-    headerCount,
-  };
 }
 
 function batchStatusLabel(status: BatchDownloadStatus): string {
@@ -732,12 +548,8 @@ function App() {
   );
   const [downloadUrl, setDownloadUrl] = useState("");
   const [curlImports, setCurlImports] = useState<CurlImportEntry[]>(loadCurlImports);
-  const [curlInputText, setCurlInputText] = useState("");
-  const [curlInputFormat, setCurlInputFormat] = useState<InputFormat>("curl");
   const [isCurlDialogOpen, setIsCurlDialogOpen] = useState(false);
-  const [curlFillUrl, setCurlFillUrl] = useState(loadCurlFillUrlSetting);
   const inputWrapRef = useRef<HTMLDivElement>(null);
-  const [panelPos, setPanelPos] = useState({ top: 80, right: 24 });
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [videoFormats, setVideoFormats] = useState<VideoFormat[]>([]);
   const [selectedFormatIdx, setSelectedFormatIdx] = useState(0);
@@ -895,27 +707,8 @@ function App() {
   }, [useAppWindowControls, settingsData]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(CURL_IMPORTS_STORAGE_KEY, JSON.stringify(curlImports));
-    } catch {
-      // ignore storage errors
-    }
+    saveCurlImports(curlImports);
   }, [curlImports]);
-
-  useEffect(() => {
-    const updatePos = () => {
-      if (inputWrapRef.current) {
-        const rect = inputWrapRef.current.getBoundingClientRect();
-        setPanelPos({
-          top: rect.bottom + 8,
-          right: window.innerWidth - rect.right,
-        });
-      }
-    };
-    updatePos();
-    window.addEventListener("resize", updatePos);
-    return () => window.removeEventListener("resize", updatePos);
-  }, []);
 
   const refreshBilibiliStatus = useCallback(async () => {
     try {
@@ -988,66 +781,6 @@ function App() {
       toast.error(extractErrorMessage(error));
     }
   }, [refreshBilibiliStatus]);
-
-  const handleImportCurl = useCallback(() => {
-    const detectedFormat = detectInputFormat(curlInputText);
-    const format = curlInputFormat === "curl" && detectedFormat !== "curl"
-      ? detectedFormat
-      : curlInputFormat;
-
-    const result = parseHeadersInput(curlInputText, format);
-    if (!result) {
-      toast.error("无法解析输入内容");
-      return;
-    }
-    if (result.headerCount === 0) {
-      toast.error("未提取到有效的 headers");
-      return;
-    }
-
-    let domain = result.domain;
-    let rawCurl = result.rawCurl;
-
-    if (format === "keyValue") {
-      // keyValue 格式需要用户手动输入 URL
-      const url = downloadUrl.trim();
-      if (!url) {
-        toast.error("键值对格式需要先在输入框填入 URL");
-        return;
-      }
-      domain = extractDomainFromUrl(url) ?? "";
-      if (!domain) {
-        toast.error("无法从输入框的 URL 中提取域名");
-        return;
-      }
-      rawCurl = buildCurlFromHeaders(curlInputText, url);
-    }
-
-    if (!domain) {
-      toast.error("无法提取域名");
-      return;
-    }
-
-    const isUpdate = curlImports.some((e) => e.domain === domain);
-    setCurlImports((prev) => {
-      const filtered = prev.filter((e) => e.domain !== domain);
-      return [...filtered, { domain, rawCurl, headerCount: result.headerCount }];
-    });
-    setCurlInputText("");
-
-    if (curlFillUrl && result.url) {
-      setDownloadUrl(result.url);
-    }
-
-    toast.success(
-      `${isUpdate ? "更新" : "导入"}了 ${domain} 的 ${result.headerCount} 个 headers`,
-    );
-  }, [curlInputText, curlInputFormat, curlImports, curlFillUrl, downloadUrl]);
-
-  const handleDeleteCurlImport = useCallback((domain: string) => {
-    setCurlImports((prev) => prev.filter((e) => e.domain !== domain));
-    toast.info(`已删除 ${domain} 的 headers`);
-  }, []);
 
   const notifyWindowControlError = (error: unknown) => {
     toast.error(
@@ -1751,7 +1484,7 @@ function App() {
       )}
 
       <Dialog open={isBilibiliLoginOpen} onOpenChange={setIsBilibiliLoginOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent zIndex="top" className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Bilibili 登录</DialogTitle>
             <DialogDescription>
@@ -2260,158 +1993,14 @@ function App() {
               </div>
             </div>
 
-            {/* 面板 - fixed 定位，完全脱离文档流 */}
-            {isCurlDialogOpen && (
-              <div
-                className="fixed z-40 w-[520px] max-w-[calc(100vw-48px)] rounded-xl border border-border bg-background shadow-xl"
-                style={{ top: panelPos.top, right: panelPos.right }}
-              >
-                <div className="p-4 space-y-3">
-                      {/* 标题 */}
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-semibold">cURL Headers</p>
-                        <button
-                          type="button"
-                          onClick={() => setIsCurlDialogOpen(false)}
-                          className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-
-                      {/* 格式切换 */}
-                      <div className="flex rounded-lg border border-border p-0.5">
-                        {(
-                          [
-                            { id: "curl", label: "cURL 命令" },
-                            { id: "keyValue", label: "键值对" },
-                          ] as const
-                        ).map(({ id, label }) => (
-                          <button
-                            key={id}
-                            type="button"
-                            onClick={() => {
-                              setCurlInputFormat(id);
-                              setCurlInputText("");
-                            }}
-                            className={cn(
-                              "flex-1 rounded-md py-1.5 text-xs font-medium transition-colors",
-                              curlInputFormat === id
-                                ? "bg-background text-foreground shadow-sm"
-                                : "text-muted-foreground hover:text-foreground",
-                            )}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* 输入框 */}
-                      <textarea
-                        value={curlInputText}
-                        onChange={(e) => setCurlInputText(e.target.value)}
-                        spellCheck={false}
-                        placeholder={
-                          curlInputFormat === "curl"
-                            ? "curl 'https://...' -H 'Referer: ...' ..."
-                            : "Referer: https://example.com/\nUser-Agent: Mozilla/5.0"
-                        }
-                        className="min-h-[140px] w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-5 !outline-none !ring-0 focus:border-border"
-                      />
-
-                      {/* 底部信息栏 */}
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">
-                          {curlInputFormat === "curl"
-                            ? countUsableCurlHeaders(curlInputText) > 0
-                              ? `将导入 ${countUsableCurlHeaders(curlInputText)} 个 header`
-                              : "粘贴完整 curl 命令"
-                            : countKeyValueHeaders(curlInputText) > 0
-                              ? `将导入 ${countKeyValueHeaders(curlInputText)} 个 header`
-                              : "每行一个 Name: Value"}
-                        </span>
-                        <Button
-                          size="sm"
-                          onClick={handleImportCurl}
-                          disabled={
-                            curlInputFormat === "curl"
-                              ? !curlInputText.trim().startsWith("curl ")
-                              : countKeyValueHeaders(curlInputText) === 0
-                          }
-                        >
-                          导入
-                        </Button>
-                      </div>
-
-                      {/* URL 填充选项 */}
-                      {curlInputFormat === "curl" && (
-                        <label className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={curlFillUrl}
-                            onChange={(e) => {
-                              const checked = e.target.checked;
-                              setCurlFillUrl(checked);
-                              try {
-                                localStorage.setItem(
-                                  CURL_FILL_URL_KEY,
-                                  String(checked),
-                                );
-                              } catch {
-                                // ignore
-                              }
-                            }}
-                            className="h-3.5 w-3.5 rounded border-border"
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            导入时自动将 URL 填充到输入框
-                          </span>
-                        </label>
-                      )}
-                      {curlInputFormat === "keyValue" && (
-                        <p className="text-xs text-amber-600">
-                          键值对格式需要先在上方的输入框填入 URL
-                        </p>
-                      )}
-
-                      {/* 已导入列表 */}
-                      {curlImports.length > 0 && (
-                        <div className="border-t border-border pt-3">
-                          <p className="text-xs text-muted-foreground mb-2">
-                            已导入 ({curlImports.length})
-                          </p>
-                          <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
-                            {curlImports.map((entry) => (
-                              <div
-                                key={entry.domain}
-                                className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2"
-                              >
-                                <div className="min-w-0">
-                                  <p className="text-sm font-medium truncate">
-                                    {entry.domain}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {entry.headerCount} 个 header
-                                  </p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleDeleteCurlImport(entry.domain)
-                                  }
-                                  className="shrink-0 h-6 w-6 flex items-center justify-center rounded-md hover:bg-destructive/10 hover:text-destructive text-muted-foreground transition-colors"
-                                  title="删除"
-                                >
-                                  <X className="h-3.5 w-3.5" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+            <CurlImportDialog
+              open={isCurlDialogOpen}
+              onOpenChange={setIsCurlDialogOpen}
+              curlImports={curlImports}
+              onCurlImportsChange={setCurlImports}
+              downloadUrl={downloadUrl}
+              onFillUrl={(url) => setDownloadUrl(url)}
+            />
 
             {/* 解析 Loading */}
             {parseStatus === "parsing" && (
