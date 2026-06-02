@@ -216,6 +216,7 @@ export function SettingsPage({
                     />
                     <M3u8DownloadSettings
                       concurrency={settings.m3u8Concurrency}
+                      downloadConcurrency={settings.downloadConcurrency}
                       onChange={handleAutoSave}
                     />
                     <FfmpegSettings />

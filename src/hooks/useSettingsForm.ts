@@ -115,6 +115,7 @@ export function useSettingsForm(): UseSettingsFormResult {
             language: readPersistedLanguage(),
             downloadDirectory: undefined,
             m3u8Concurrency: 8,
+            downloadConcurrency: 3,
           } as SettingsFormState);
 
         const next: SettingsFormState = {
@@ -151,6 +152,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         language: normalizedLanguage,
         downloadDirectory: serverData.downloadDirectory,
         m3u8Concurrency: serverData.m3u8Concurrency ?? 8,
+      downloadConcurrency: serverData.downloadConcurrency ?? 3,
       };
 
       setSettingsState(normalized);
