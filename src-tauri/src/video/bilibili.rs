@@ -56,6 +56,28 @@ impl VideoParser for BilibiliParser {
     }
 
     async fn parse(&self, url: &str, client: &reqwest::Client) -> Result<VideoInfo, String> {
+        let cookie = load_cookie_header().unwrap_or_default();
+        Self::parse_with_cookie(url, client, &cookie).await
+    }
+
+    async fn parse_with_headers(
+        &self,
+        url: &str,
+        client: &reqwest::Client,
+        headers: Option<&HeaderMap>,
+    ) -> Result<VideoInfo, String> {
+        let local_cookie = load_cookie_header().unwrap_or_default();
+        let merged_cookie = merge_cookies(headers, &local_cookie);
+        Self::parse_with_cookie(url, client, &merged_cookie).await
+    }
+}
+
+impl BilibiliParser {
+    async fn parse_with_cookie(
+        url: &str,
+        client: &reqwest::Client,
+        cookie: &str,
+    ) -> Result<VideoInfo, String> {
         let resolved_url = if url.contains("b23.tv") {
             resolve_short_url(client, url).await?
         } else {
@@ -63,17 +85,17 @@ impl VideoParser for BilibiliParser {
         };
 
         if let Some((mid, sid, is_series)) = extract_space_list_ids(&resolved_url) {
-            return parse_space_list(client, &resolved_url, &mid, &sid, is_series).await;
+            return parse_space_list(client, &resolved_url, &mid, &sid, is_series, cookie).await;
         }
 
-        parse_video(client, &resolved_url).await
+        parse_video(client, &resolved_url, cookie).await
     }
 }
 
 pub async fn generate_login_qr(client: &reqwest::Client) -> Result<BilibiliLoginQr, String> {
     let resp: serde_json::Value = client
         .get("https://passport.bilibili.com/x/passport-login/web/qrcode/generate")
-        .headers(default_headers(None))
+        .headers(default_headers(""))
         .send()
         .await
         .map_err(|e| format!("获取 Bilibili 登录二维码失败: {e}"))?
@@ -116,7 +138,7 @@ pub async fn poll_login_qr(
 ) -> Result<BilibiliLoginPoll, String> {
     let resp = client
         .get("https://passport.bilibili.com/x/passport-login/web/qrcode/poll")
-        .headers(default_headers(None))
+        .headers(default_headers(""))
         .query(&[("qrcode_key", qrcode_key)])
         .send()
         .await
@@ -184,7 +206,7 @@ pub async fn login_status(client: &reqwest::Client) -> Result<BilibiliLoginStatu
 
     let resp: serde_json::Value = client
         .get("https://api.bilibili.com/x/web-interface/nav")
-        .headers(default_headers(Some(&cookie)))
+        .headers(default_headers(&cookie))
         .send()
         .await
         .map_err(|e| format!("检查 Bilibili 登录状态失败: {e}"))?
@@ -245,7 +267,7 @@ async fn logout_server_session(client: &reqwest::Client) -> Result<(), String> {
 
     let resp: serde_json::Value = client
         .post("https://passport.bilibili.com/login/exit/v2")
-        .headers(default_headers(Some(&cookie)))
+        .headers(default_headers(&cookie))
         .form(&[("biliCSRF", csrf.as_str())])
         .send()
         .await
@@ -265,15 +287,14 @@ fn remove_cookie_store() -> Result<(), String> {
     Ok(())
 }
 
-async fn parse_video(client: &reqwest::Client, url: &str) -> Result<VideoInfo, String> {
+async fn parse_video(client: &reqwest::Client, url: &str, cookie: &str) -> Result<VideoInfo, String> {
     let bvid = extract_bvid(url)?;
     let selected_page = extract_page(url).unwrap_or(1);
-    let cookie = load_cookie_header().unwrap_or_default();
 
     let view_url = format!("https://api.bilibili.com/x/web-interface/view?bvid={bvid}");
     let view_resp: serde_json::Value = client
         .get(&view_url)
-        .headers(default_headers(Some(&cookie)))
+        .headers(default_headers(cookie))
         .send()
         .await
         .map_err(|e| format!("Bilibili view API request failed: {e}"))?
@@ -314,7 +335,7 @@ async fn parse_video(client: &reqwest::Client, url: &str) -> Result<VideoInfo, S
         .or_else(|| data.get("cid").and_then(|v| v.as_u64()))
         .ok_or_else(|| "Failed to get cid from Bilibili video info".to_string())?;
 
-    let formats = fetch_play_formats(client, &bvid, cid, &cookie).await?;
+    let formats = fetch_play_formats(client, &bvid, cid, cookie).await?;
     let items: Vec<VideoItem> = pages
         .map(|pages| {
             pages
@@ -373,8 +394,8 @@ async fn parse_space_list(
     mid: &str,
     sid: &str,
     is_series: bool,
+    cookie: &str,
 ) -> Result<VideoInfo, String> {
-    let cookie = load_cookie_header().unwrap_or_default();
     let mut items = Vec::new();
     let mut title = if is_series {
         "Bilibili 视频列表"
@@ -392,7 +413,7 @@ async fn parse_space_list(
         } else {
             "https://api.bilibili.com/x/polymer/web-space/seasons_archives_list"
         };
-        let mut req = client.get(api_url).headers(default_headers(Some(&cookie)));
+        let mut req = client.get(api_url).headers(default_headers(cookie));
         req = if is_series {
             req.query(&[
                 ("mid", mid),
@@ -537,7 +558,7 @@ async fn fetch_play_formats(
     );
     let play_resp: serde_json::Value = client
         .get(&play_url)
-        .headers(default_headers(Some(cookie)))
+        .headers(default_headers(cookie))
         .send()
         .await
         .map_err(|e| format!("Bilibili playurl API request failed: {e}"))?
@@ -638,7 +659,7 @@ async fn fetch_progressive_preview_url(
         );
         let Ok(resp) = client
             .get(&play_url)
-            .headers(default_headers(Some(cookie)))
+            .headers(default_headers(cookie))
             .send()
             .await
         else {
@@ -714,25 +735,37 @@ fn codec_label(codecs: &str) -> &'static str {
 async fn resolve_short_url(client: &reqwest::Client, url: &str) -> Result<String, String> {
     let resp = client
         .get(url)
-        .headers(default_headers(None))
+        .headers(default_headers(""))
         .send()
         .await
         .map_err(|e| format!("Failed to resolve Bilibili short URL: {e}"))?;
     Ok(resp.url().to_string())
 }
 
-fn default_headers(cookie: Option<&str>) -> HeaderMap {
+fn default_headers(cookie: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static(BILI_UA));
     headers.insert(REFERER, HeaderValue::from_static(BILI_REFERER));
-    if let Some(cookie) = cookie {
-        if !cookie.is_empty() {
-            if let Ok(value) = HeaderValue::from_str(cookie) {
-                headers.insert(COOKIE, value);
-            }
+    if !cookie.is_empty() {
+        if let Ok(value) = HeaderValue::from_str(cookie) {
+            headers.insert(COOKIE, value);
         }
     }
     headers
+}
+
+fn merge_cookies(headers: Option<&HeaderMap>, local_cookie: &str) -> String {
+    let Some(headers) = headers else {
+        return local_cookie.to_string();
+    };
+    let Some(ext_cookie) = headers.get(COOKIE).and_then(|v| v.to_str().ok()) else {
+        return local_cookie.to_string();
+    };
+    if local_cookie.is_empty() {
+        ext_cookie.to_string()
+    } else {
+        format!("{}; {}", ext_cookie, local_cookie)
+    }
 }
 
 fn ensure_code_ok(value: &serde_json::Value) -> Result<(), String> {
@@ -824,8 +857,10 @@ fn save_cookies_from_headers(headers: &HeaderMap) -> Result<(), String> {
 }
 
 fn extract_bvid(url: &str) -> Result<String, String> {
+    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
+    let path = parsed.path();
     let re = Regex::new(r"(BV[a-zA-Z0-9]+)").map_err(|e| e.to_string())?;
-    re.captures(url)
+    re.captures(path)
         .and_then(|caps| caps.get(1))
         .map(|m| m.as_str().to_string())
         .ok_or_else(|| "Could not extract BV ID from Bilibili URL".to_string())

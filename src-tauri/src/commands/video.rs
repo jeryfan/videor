@@ -145,6 +145,7 @@ pub async fn start_video_download(
     title: String,
     format: VideoFormat,
     save_dir: String,
+    is_batch: bool,
 ) -> Result<String, String> {
     let task_id = format!(
         "dl_{}",
@@ -157,16 +158,17 @@ pub async fn start_video_download(
     let save_path = PathBuf::from(save_dir);
 
     log::info!(
-        "[VideoCommand] Starting download: task_id={}, title={}, save_dir={:?}",
+        "[VideoCommand] Starting download: task_id={}, title={}, save_dir={:?}, is_batch={}",
         task_id,
         title,
-        save_path
+        save_path,
+        is_batch
     );
 
     let app_clone = app.clone();
     let manager = app.state::<DownloadManager>();
     manager
-        .start_download(app_clone, task_id.clone(), title, format, save_path)
+        .start_download(app_clone, task_id.clone(), title, format, save_path, is_batch)
         .await?;
 
     Ok(task_id)

@@ -1,14 +1,34 @@
 use super::{hash_map_to_header_map, VideoFormat};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use futures_util::{stream, StreamExt};
-use std::collections::HashMap;
+use once_cell::sync::Lazy;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+
+static BATCH_TASKS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+fn mark_task_as_batch(task_id: &str) {
+    if let Ok(mut tasks) = BATCH_TASKS.lock() {
+        tasks.insert(task_id.to_string());
+    }
+}
+
+fn is_batch_task(task_id: &str) -> bool {
+    BATCH_TASKS.lock().map(|tasks| tasks.contains(task_id)).unwrap_or(false)
+}
+
+fn remove_batch_task(task_id: &str) {
+    if let Ok(mut tasks) = BATCH_TASKS.lock() {
+        tasks.remove(task_id);
+    }
+}
 
 /// 下载进度事件
 #[derive(Debug, Clone, serde::Serialize)]
@@ -19,6 +39,8 @@ pub struct DownloadProgress {
     pub speed: u64,
     pub status: DownloadStatus,
     pub file_path: Option<String>,
+    #[serde(default)]
+    pub is_batch: Option<bool>,
 }
 
 /// 下载状态
@@ -56,7 +78,11 @@ impl DownloadManager {
         title: String,
         format: VideoFormat,
         save_path: PathBuf,
+        is_batch: bool,
     ) -> Result<(), String> {
+        if is_batch {
+            mark_task_as_batch(&task_id);
+        }
         let sanitized_title = sanitize_filename(&title);
         let final_path = if format.audio_url.is_some() {
             // DASH 格式：先下载到临时文件再合并
@@ -96,6 +122,9 @@ impl DownloadManager {
                 tasks.remove(&task_id_clone);
             }
 
+            let is_batch_flag = is_batch_task(&task_id_clone);
+            remove_batch_task(&task_id_clone);
+
             match result {
                 Ok(()) => {
                     let _ = app.emit(
@@ -107,6 +136,7 @@ impl DownloadManager {
                             speed: 0,
                             status: DownloadStatus::Completed,
                             file_path: final_path.to_str().map(str::to_string),
+                            is_batch: Some(is_batch_flag),
                         },
                     );
                 }
@@ -120,6 +150,7 @@ impl DownloadManager {
                             speed: 0,
                             status: DownloadStatus::Failed(e),
                             file_path: None,
+                            is_batch: Some(is_batch_flag),
                         },
                     );
                 }
@@ -346,6 +377,7 @@ async fn download_hls_concurrently(
                             speed,
                             status: DownloadStatus::Downloading,
                             file_path: None,
+                            is_batch: None,
                         },
                     );
                     *report_at = now;
@@ -367,6 +399,7 @@ async fn download_hls_concurrently(
 
     if cancel_token.is_cancelled() {
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+        let is_batch = is_batch_task(task_id);
         let _ = app.emit(
             "video-download-progress",
             DownloadProgress {
@@ -376,6 +409,7 @@ async fn download_hls_concurrently(
                 speed: 0,
                 status: DownloadStatus::Cancelled,
                 file_path: None,
+                is_batch: Some(is_batch),
             },
         );
         return Err("下载已取消".to_string());
@@ -730,14 +764,20 @@ async fn download_stream(
 ) -> Result<(), String> {
     let is_bilibili = url.contains("bilibili.com") || url.contains("bilivideo.");
 
+    let extra_referer = format
+        .headers
+        .get("referer")
+        .or_else(|| format.headers.get("Referer"))
+        .map(|s| s.as_str());
+
     let (final_url, referer) = if is_bilibili {
         (url.to_string(), Some("https://www.bilibili.com/"))
     } else {
-        // 抖音等非B站URL：手动解析302获取CDN直链
-        let resolved = resolve_cdn_url(url)
+        // 非B站URL：手动解析302获取CDN直链，并透传用户提供的Referer
+        let resolved = resolve_cdn_url(url, extra_referer)
             .await
             .unwrap_or_else(|_| url.to_string());
-        (resolved, None)
+        (resolved, extra_referer)
     };
 
     let dl_client = reqwest::Client::builder()
@@ -772,6 +812,7 @@ async fn download_stream(
             _ = cancel_token.cancelled() => {
                 drop(file);
                 let _ = tokio::fs::remove_file(save_path).await;
+                let is_batch = is_batch_task(task_id);
                 let _ = app.emit(
                     "video-download-progress",
                     DownloadProgress {
@@ -780,7 +821,8 @@ async fn download_stream(
                         total,
                         speed: 0,
                         status: DownloadStatus::Cancelled,
-                file_path: None,
+                        file_path: None,
+                        is_batch: Some(is_batch),
                     },
                 );
                 return Err("下载已取消".to_string());
@@ -811,7 +853,8 @@ async fn download_stream(
                                     total,
                                     speed,
                                     status: DownloadStatus::Downloading,
-                            file_path: None,
+                                    file_path: None,
+                                    is_batch: None,
                                 },
                             );
 
@@ -843,16 +886,18 @@ fn is_m3u8_url(url: &str) -> bool {
 }
 
 /// 预解析URL的302重定向，获取最终CDN直链
-async fn resolve_cdn_url(url: &str) -> Result<String, String> {
+async fn resolve_cdn_url(url: &str, referer: Option<&str>) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
 
-    let resp = client
-        .get(url)
-        .header("Referer", "https://www.douyin.com/")
+    let mut req = client.get(url);
+    if let Some(r) = referer {
+        req = req.header("Referer", r);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -868,14 +913,31 @@ async fn resolve_cdn_url(url: &str) -> Result<String, String> {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    name.chars()
+    let mut result: String = name
+        .chars()
         .map(|c| match c {
             '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
             _ => c,
         })
-        .collect::<String>()
-        .trim()
-        .to_string()
+        .collect();
+    result = result.trim().to_string();
+    if result == "." || result == ".." {
+        result = "_".to_string();
+    }
+    let lower = result.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "con" | "prn" | "aux" | "nul"
+            | "com1" | "com2" | "com3" | "com4" | "com5" | "com6" | "com7" | "com8" | "com9"
+            | "lpt1" | "lpt2" | "lpt3" | "lpt4" | "lpt5" | "lpt6" | "lpt7" | "lpt8" | "lpt9"
+    ) {
+        result.push_str("_video");
+    }
+    if result.is_empty() {
+        result = "video".to_string();
+    }
+    result
 }
 
 #[cfg(test)]

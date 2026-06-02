@@ -1,16 +1,26 @@
-use super::{VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser};
+use super::{header_map_to_hash_map, VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser};
+use reqwest::header::HeaderMap;
 
 pub struct DirectParser;
 
 #[async_trait::async_trait]
 impl VideoParser for DirectParser {
     fn can_handle(&self, url: &str) -> bool {
-        let video_ext_regex = regex::Regex::new(r"\.(mp4|webm|ogg|mov)(\?.*)?$").unwrap();
+        let video_ext_regex =
+            regex::Regex::new(r"\.(mp4|webm|ogg|mov|m4v|mkv|flv|ts)(\?.*)?(#.*)?$").unwrap();
         video_ext_regex.is_match(url)
     }
 
     async fn parse(&self, url: &str, _client: &reqwest::Client) -> Result<VideoInfo, String> {
-        // 直链视频无需解析，直接返回
+        self.parse_with_headers(url, _client, None).await
+    }
+
+    async fn parse_with_headers(
+        &self,
+        url: &str,
+        _client: &reqwest::Client,
+        headers: Option<&HeaderMap>,
+    ) -> Result<VideoInfo, String> {
         let title = url
             .split('/')
             .last()
@@ -18,7 +28,12 @@ impl VideoParser for DirectParser {
             .split('?')
             .next()
             .unwrap_or("视频")
+            .split('#')
+            .next()
+            .unwrap_or("视频")
             .to_string();
+
+        let format_headers = headers.map(header_map_to_hash_map).unwrap_or_default();
 
         Ok(VideoInfo {
             title,
@@ -31,7 +46,7 @@ impl VideoParser for DirectParser {
                 preview_url: None,
                 audio_url: None,
                 size: None,
-                headers: Default::default(),
+                headers: format_headers,
             }],
             kind: VideoKind::Video,
             items: Vec::<VideoItem>::new(),

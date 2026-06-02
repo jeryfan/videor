@@ -1,5 +1,6 @@
-use super::{VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser};
+use super::{header_map_to_hash_map, VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser};
 use regex::Regex;
+use reqwest::header::HeaderMap;
 use serde_json::Value;
 
 pub struct DouyinParser;
@@ -7,10 +8,27 @@ pub struct DouyinParser;
 #[async_trait::async_trait]
 impl VideoParser for DouyinParser {
     fn can_handle(&self, url: &str) -> bool {
-        url.contains("douyin.com") || url.contains("douyinvod.com") || url.contains("iesdouyin.com")
+        let Ok(parsed) = url::Url::parse(url) else {
+            return false;
+        };
+        let host = parsed.host_str().unwrap_or("");
+        host.ends_with("douyin.com")
+            || host.ends_with("douyinvod.com")
+            || host.ends_with("iesdouyin.com")
     }
 
     async fn parse(&self, url: &str, client: &reqwest::Client) -> Result<VideoInfo, String> {
+        self.parse_with_headers(url, client, None).await
+    }
+
+    async fn parse_with_headers(
+        &self,
+        url: &str,
+        client: &reqwest::Client,
+        headers: Option<&HeaderMap>,
+    ) -> Result<VideoInfo, String> {
+        let format_headers = headers.map(header_map_to_hash_map).unwrap_or_default();
+
         // 直链 CDN — 直接返回
         if is_direct_cdn_url(url) {
             return Ok(VideoInfo {
@@ -24,7 +42,7 @@ impl VideoParser for DouyinParser {
                     preview_url: None,
                     audio_url: None,
                     size: None,
-                    headers: Default::default(),
+                    headers: format_headers,
                 }],
                 kind: VideoKind::Video,
                 items: Vec::<VideoItem>::new(),
@@ -36,7 +54,7 @@ impl VideoParser for DouyinParser {
 
         // 短链 -> 提取视频 ID
         let page_url = if url.contains("v.douyin.com") {
-            resolve_short_url(client, url).await?
+            resolve_short_url_with_headers(client, url, headers).await?
         } else {
             url.to_string()
         };
@@ -44,7 +62,7 @@ impl VideoParser for DouyinParser {
         let video_id = extract_video_id(&page_url)?;
 
         // 通过 iesdouyin 移动端分享页面获取视频信息
-        fetch_via_mobile_share(client, &video_id).await
+        fetch_via_mobile_share_with_headers(client, &video_id, headers, &format_headers).await
     }
 }
 
@@ -53,9 +71,16 @@ fn is_direct_cdn_url(url: &str) -> bool {
 }
 
 /// 跟踪短链重定向获取最终 URL
-async fn resolve_short_url(client: &reqwest::Client, url: &str) -> Result<String, String> {
-    let resp = client
-        .get(url)
+async fn resolve_short_url_with_headers(
+    client: &reqwest::Client,
+    url: &str,
+    headers: Option<&HeaderMap>,
+) -> Result<String, String> {
+    let mut req = client.get(url);
+    if let Some(h) = headers {
+        req = req.headers(h.clone());
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Failed to resolve short URL: {e}"))?;
@@ -63,18 +88,34 @@ async fn resolve_short_url(client: &reqwest::Client, url: &str) -> Result<String
 }
 
 /// 从 iesdouyin 移动端分享页面获取视频信息
-async fn fetch_via_mobile_share(
+async fn fetch_via_mobile_share_with_headers(
     client: &reqwest::Client,
     video_id: &str,
+    headers: Option<&HeaderMap>,
+    base_headers: &std::collections::HashMap<String, String>,
 ) -> Result<VideoInfo, String> {
     let share_url = format!("https://www.iesdouyin.com/share/video/{}", video_id);
 
     let mobile_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1";
 
-    let resp = client
+    let mut req = client
         .get(&share_url)
         .header("User-Agent", mobile_ua)
-        .header("Referer", "https://www.douyin.com/")
+        .header("Referer", "https://www.douyin.com/");
+
+    if let Some(h) = headers {
+        for (name, value) in h.iter() {
+            let name_str = name.as_str();
+            if name_str.eq_ignore_ascii_case("user-agent")
+                || name_str.eq_ignore_ascii_case("referer")
+            {
+                continue;
+            }
+            req = req.header(name_str, value);
+        }
+    }
+
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("Failed to fetch Douyin share page: {e}"))?;
@@ -133,7 +174,7 @@ async fn fetch_via_mobile_share(
     {
         for (idx, url_val) in url_list.iter().enumerate() {
             if let Some(raw_url) = url_val.as_str() {
-                let url = raw_url.replace("playwm", "play");
+                let url = raw_url.replacen("playwm", "play", 1);
                 let label = if idx == 0 {
                     "原画"
                 } else {
@@ -179,6 +220,13 @@ async fn fetch_via_mobile_share(
 
     if formats.is_empty() {
         return Err("No playable video URLs found in Douyin share page".to_string());
+    }
+
+    let mut final_headers = base_headers.clone();
+    final_headers.insert("Referer".to_string(), "https://www.douyin.com/".to_string());
+
+    for format in &mut formats {
+        format.headers = final_headers.clone();
     }
 
     Ok(VideoInfo {

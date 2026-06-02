@@ -9,6 +9,7 @@ export interface DownloadProgress {
   speed: number;
   status: "downloading" | "completed" | "failed" | "cancelled";
   file_path?: string | null;
+  is_batch?: boolean;
 }
 
 export type DownloadStatus = DownloadProgress["status"];
@@ -43,11 +44,13 @@ export async function startVideoDownload(
   title: string,
   format: VideoFormat,
   saveDir: string,
+  isBatch: boolean = false,
 ): Promise<string> {
   return await invoke<string>("start_video_download", {
     title,
     format,
     saveDir,
+    isBatch,
   });
 }
 

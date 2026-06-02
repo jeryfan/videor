@@ -930,6 +930,8 @@ function App() {
 
     const setup = async () => {
       unlisten = await listenDownloadProgress((progress) => {
+        let batchCompletionToast: { message: string; type: "success" | "info" } | null = null;
+
         setDownloadHistoryTasks((tasks) => {
           const now = Date.now();
 
@@ -978,17 +980,45 @@ function App() {
               };
             });
             if (!changed) return task;
-            return {
+            const prevStatus = task.status;
+            const state = calculateBatchTaskState(items);
+            const nextTask = {
               ...task,
-              ...calculateBatchTaskState(items),
+              ...state,
               items,
               updatedAt: now,
             };
+            const wasActive = ["queued", "parsing", "downloading"].includes(prevStatus);
+            const isFinal = !["queued", "parsing", "downloading"].includes(nextTask.status);
+            if (wasActive && isFinal) {
+              const completedCount = items.filter((i) => i.status === "completed").length;
+              const total = items.length;
+              if (completedCount > 0) {
+                batchCompletionToast = {
+                  message: `批量下载完成：${completedCount}/${total} 个视频`,
+                  type: "success",
+                };
+              } else {
+                batchCompletionToast = { message: "批量下载已结束", type: "info" };
+              }
+            }
+            return nextTask;
           });
         });
 
+        if (batchCompletionToast) {
+          const { type, message } = batchCompletionToast;
+          if (type === "success") {
+            toast.success(message);
+          } else {
+            toast.info(message);
+          }
+        }
+
         if (progress.status === "completed") {
-          toast.success("下载完成");
+          if (progress.is_batch !== true) {
+            toast.success("下载完成");
+          }
           const keys = downloadTaskResourceKeysRef.current.get(
             progress.task_id,
           );
@@ -1001,7 +1031,9 @@ function App() {
           );
         } else if (progress.status === "failed") {
           setDownloadError("下载失败");
-          toast.error("下载失败");
+          if (progress.is_batch !== true) {
+            toast.error("下载失败");
+          }
           const keys = downloadTaskResourceKeysRef.current.get(
             progress.task_id,
           );
@@ -1013,7 +1045,9 @@ function App() {
             taskId === progress.task_id ? null : taskId,
           );
         } else if (progress.status === "cancelled") {
-          toast.info("下载已取消");
+          if (progress.is_batch !== true) {
+            toast.info("下载已取消");
+          }
           const keys = downloadTaskResourceKeysRef.current.get(
             progress.task_id,
           );
@@ -1041,7 +1075,7 @@ function App() {
     }
 
     try {
-      const format = videoFormats[0];
+      const format = videoFormats[selectedFormatIdx];
       const resourceKeys = Array.from(
         new Set(
           [format.url, downloadUrl.trim()]
@@ -1085,7 +1119,7 @@ function App() {
       setDownloadError(null);
 
       toast.info(`开始下载: ${videoTitle}`);
-      const taskId = await startVideoDownload(videoTitle, format, dir);
+      const taskId = await startVideoDownload(videoTitle, format, dir, false);
       downloadTaskResourceKeysRef.current.set(taskId, resourceKeys);
       setDownloadTaskId(taskId);
       const now = Date.now();
@@ -1178,7 +1212,8 @@ function App() {
     const dir = await ensureDownloadDirectory();
     if (!dir) return;
 
-    const collectionDir = await join(dir, sanitizePathSegment(videoTitle));
+    const collectionTitle = videoTitle || "Bilibili 批量下载";
+    const collectionDir = await join(dir, sanitizePathSegment(collectionTitle));
     const runId = batchRunIdRef.current + 1;
     batchRunIdRef.current = runId;
     const historyTaskId = `batch_${crypto.randomUUID()}`;
@@ -1252,6 +1287,7 @@ function App() {
           formatBatchItemTitle(idx, item.title || info.title),
           format,
           collectionDir,
+          true,
         );
         setDownloadHistoryTasks((tasks) =>
           updateBatchItem(tasks, historyTaskId, item.id, {
@@ -1355,6 +1391,7 @@ function App() {
           formatBatchItemTitle(item.order, item.title || info.title),
           format,
           collectionDir,
+          true,
         );
         setDownloadHistoryTasks((tasks) =>
           updateBatchItem(tasks, task.id, item.id, {
@@ -1796,7 +1833,7 @@ function App() {
                                 task.filePath as string,
                               )
                             }
-                            title="播放"
+                            aria-label="播放"
                             className="h-8 w-8 p-0"
                           >
                             <Play className="h-3.5 w-3.5" />
@@ -1809,7 +1846,7 @@ function App() {
                                 task.filePath as string,
                               )
                             }
-                            title="在文件夹中显示"
+                            aria-label="在文件夹中显示"
                             className="h-8 w-8 p-0"
                           >
                             <FolderOpen className="h-3.5 w-3.5" />
@@ -1881,7 +1918,7 @@ function App() {
                                       item.filePath as string,
                                     )
                                   }
-                                  title="播放"
+                                  aria-label="播放"
                                   className="h-7 w-7 p-0"
                                 >
                                   <Play className="h-3.5 w-3.5" />
@@ -1894,7 +1931,7 @@ function App() {
                                       item.filePath as string,
                                     )
                                   }
-                                  title="在文件夹中显示"
+                                  aria-label="在文件夹中显示"
                                   className="h-7 w-7 p-0"
                                 >
                                   <FolderOpen className="h-3.5 w-3.5" />
