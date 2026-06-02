@@ -240,3 +240,18 @@ pub async fn reveal_download_file(app: AppHandle, file_path: String) -> Result<(
         .reveal_item_in_dir(path)
         .map_err(|e| format!("在文件夹中显示失败: {e}"))
 }
+
+#[tauri::command]
+pub async fn open_directory(app: AppHandle, dir_path: String) -> Result<(), String> {
+    let path = PathBuf::from(dir_path);
+    if !path.is_dir() {
+        return Err("目录不存在".to_string());
+    }
+    let path = path
+        .to_str()
+        .ok_or_else(|| "目录路径包含无效字符".to_string())?
+        .to_string();
+    app.opener()
+        .open_path(path, None::<String>)
+        .map_err(|e| format!("打开目录失败: {e}"))
+}

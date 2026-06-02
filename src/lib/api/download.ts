@@ -91,6 +91,10 @@ export async function revealDownloadFile(filePath: string): Promise<void> {
   return await invoke("reveal_download_file", { filePath });
 }
 
+export async function openDirectory(dirPath: string): Promise<void> {
+  return await invoke("open_directory", { dirPath });
+}
+
 /**
  * 监听下载进度事件
  * @param callback 进度回调

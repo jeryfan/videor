@@ -22,9 +22,10 @@ import {
   ChevronRight,
   FolderOpen,
   Play,
+  RotateCcw,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { join } from "@tauri-apps/api/path";
+import { join, dirname } from "@tauri-apps/api/path";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,6 +73,7 @@ import {
   clearDownloadHistory,
   openDownloadFile,
   revealDownloadFile,
+  openDirectory,
 } from "@/lib/api/download";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -124,6 +126,7 @@ interface DownloadHistoryTask {
   speed: number;
   error?: string;
   filePath?: string;
+  directoryPath?: string;
   items?: BatchDownloadItem[];
   expanded?: boolean;
   createdAt: number;
@@ -185,12 +188,65 @@ function batchStatusLabel(status: BatchDownloadStatus): string {
   }
 }
 
-function downloadStatusClass(status: BatchDownloadStatus): string {
-  if (status === "completed") return "text-emerald-600";
-  if (status === "failed") return "text-destructive";
-  if (status === "cancelled") return "text-muted-foreground";
-  if (status === "remuxing") return "text-amber-500";
-  return "text-muted-foreground";
+function downloadStatusBadgeClass(status: BatchDownloadStatus): string {
+  switch (status) {
+    case "completed":
+      return "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900";
+    case "failed":
+      return "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400 border-red-200 dark:border-red-900";
+    case "cancelled":
+      return "bg-gray-50 text-gray-600 dark:bg-gray-900/40 dark:text-gray-400 border-gray-200 dark:border-gray-800";
+    case "remuxing":
+      return "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border-amber-200 dark:border-amber-900";
+    case "downloading":
+      return "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 border-blue-200 dark:border-blue-900";
+    case "parsing":
+      return "bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border-purple-200 dark:border-purple-900";
+    default:
+      return "bg-gray-50 text-gray-600 dark:bg-gray-900/40 dark:text-gray-400 border-gray-200 dark:border-gray-800";
+  }
+}
+
+function CircularProgress({
+  progress,
+  size = 32,
+  status,
+}: {
+  progress: number;
+  size?: number;
+  status?: BatchDownloadStatus;
+}) {
+  const stroke = 3;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c - (progress / 100) * c;
+  const colorClass =
+    status === "failed" ? "text-destructive" : "text-primary";
+  return (
+    <svg width={size} height={size} className="shrink-0 -rotate-90">
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={stroke}
+        className="text-muted/30"
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={stroke}
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={offset}
+        className={cn("transition-all duration-500", colorClass)}
+      />
+    </svg>
+  );
 }
 
 function formatDownloadSpeed(speed: number): string {
@@ -447,6 +503,10 @@ function restoreDownloadHistoryTasks(history: any): DownloadHistoryTask[] {
                 ? task.resourceKey
                 : undefined,
             ...state,
+            directoryPath:
+              typeof task.directoryPath === "string"
+                ? task.directoryPath
+                : undefined,
             items,
             expanded: Boolean(task.expanded),
             createdAt:
@@ -1241,6 +1301,7 @@ function App() {
         title: videoTitle || "Bilibili 批量下载",
         source: "bilibili",
         ...calculateBatchTaskState(initialItems),
+        directoryPath: collectionDir,
         items: initialItems,
         expanded: true,
         createdAt: now,
@@ -1455,6 +1516,30 @@ function App() {
       toast.error(extractErrorMessage(error) || "打开文件夹失败");
     }
   }, []);
+
+  const handleOpenBatchDirectory = useCallback(
+    async (task: DownloadHistoryTask) => {
+      let dirPath = task.directoryPath;
+      if (!dirPath) {
+        const firstCompleted = task.items?.find(
+          (item) => item.status === "completed" && item.filePath,
+        );
+        if (firstCompleted?.filePath) {
+          dirPath = await dirname(firstCompleted.filePath);
+        }
+      }
+      if (!dirPath) {
+        toast.error("未找到合集目录");
+        return;
+      }
+      try {
+        await openDirectory(dirPath);
+      } catch (error) {
+        toast.error(extractErrorMessage(error) || "打开目录失败");
+      }
+    },
+    [],
+  );
 
   const handleBackToMain = useCallback(() => {
     setShowSettings(false);
@@ -1720,8 +1805,10 @@ function App() {
           )}
 
           {!hasDownloadTasks && (
-            <div className="rounded-xl border border-border bg-muted/20 p-6 text-center text-sm text-muted-foreground">
-              暂无下载任务
+            <div className="rounded-xl border border-dashed border-border bg-muted/10 p-8 text-center">
+              <Download className="mx-auto h-8 w-8 text-muted-foreground/40 mb-3" />
+              <p className="text-sm text-muted-foreground">暂无下载任务</p>
+              <p className="mt-1 text-xs text-muted-foreground/60">解析视频后即可开始下载</p>
             </div>
           )}
 
@@ -1743,40 +1830,40 @@ function App() {
             return (
               <div
                 key={task.id}
-                className="overflow-hidden rounded-xl border border-border bg-background"
+                className="overflow-hidden rounded-xl border border-border bg-background shadow-sm transition-shadow hover:shadow-md"
               >
-                <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_92px_86px_auto] items-center gap-3 px-4 py-3 text-left max-[720px]:grid-cols-[auto_minmax(0,1fr)_auto]">
-                  {task.type === "batch" ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDownloadHistoryTasks((tasks) =>
-                          tasks.map((historyTask) =>
-                            historyTask.id === task.id
-                              ? {
-                                  ...historyTask,
-                                  expanded: !historyTask.expanded,
-                                  updatedAt: Date.now(),
-                                }
-                              : historyTask,
-                          ),
-                        )
-                      }
-                      className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-muted"
-                      title={task.expanded ? "收起" : "展开"}
-                    >
-                      {task.expanded ? (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </button>
-                  ) : (
-                    <span className="h-8 w-8" />
-                  )}
-                  <div className="min-w-0">
+                <div className="flex items-center gap-3 px-4 py-3.5 text-left">
+                  <div className="shrink-0 w-7 flex items-center justify-center">
+                    {task.type === "batch" ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDownloadHistoryTasks((tasks) =>
+                            tasks.map((historyTask) =>
+                              historyTask.id === task.id
+                                ? {
+                                    ...historyTask,
+                                    expanded: !historyTask.expanded,
+                                    updatedAt: Date.now(),
+                                  }
+                                : historyTask,
+                            ),
+                          )
+                        }
+                        className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted transition-colors"
+                        aria-label={task.expanded ? "收起" : "展开"}
+                      >
+                        {task.expanded ? (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{task.title}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
+                    <p className="mt-0.5 text-xs text-muted-foreground">
                       {task.type === "batch"
                         ? `批量任务 · 共 ${items.length} 个 · 完成 ${completedCount} 个`
                         : "单视频"}
@@ -1790,188 +1877,163 @@ function App() {
                       {VIDEO_SOURCES.find((source) => source.id === task.source)
                         ?.label || "其他"}
                     </p>
+                    {task.error && (
+                      <p className="mt-0.5 truncate text-xs text-destructive">
+                        {task.error}
+                      </p>
+                    )}
                   </div>
-                  <span
-                    className={cn(
-                      "text-right text-xs max-[720px]:hidden",
-                      downloadStatusClass(task.status),
-                    )}
-                  >
-                    {batchStatusLabel(task.status)}
-                  </span>
-                  <span className="text-right text-xs tabular-nums text-muted-foreground max-[720px]:hidden">
-                    {formatDownloadSpeed(
-                      task.status === "downloading" ? task.speed : 0,
-                    )}
-                  </span>
-                  <div className="flex items-center justify-end gap-2">
-                    <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">
-                      {task.progress}%
-                    </span>
-                    {isActive && task.type === "single" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void cancelVideoDownload(task.id)}
-                        className="h-8 px-3 text-xs"
-                      >
-                        取消
-                      </Button>
-                    )}
-                    {isActive && task.type === "batch" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void handleCancelBatchDownloads(task)}
-                        className="h-8 px-3 text-xs"
-                      >
-                        取消
-                      </Button>
-                    )}
-                    {task.type === "single" &&
-                      task.status === "completed" &&
-                      task.filePath && (
-                        <>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              void handleOpenDownloadedFile(
-                                task.filePath as string,
-                              )
-                            }
-                            aria-label="播放"
-                            className="h-8 w-8 p-0"
-                          >
-                            <Play className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              void handleRevealDownloadedFile(
-                                task.filePath as string,
-                              )
-                            }
-                            aria-label="在文件夹中显示"
-                            className="h-8 w-8 p-0"
-                          >
-                            <FolderOpen className="h-3.5 w-3.5" />
-                          </Button>
-                        </>
-                      )}
-                  </div>
-                </div>
-                <div className="border-t border-border px-4 py-3">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div
+                  <div className="shrink-0 flex items-center gap-2">
+                    <span
                       className={cn(
-                        "h-full rounded-full transition-all duration-300",
-                        task.status === "failed"
-                          ? "bg-destructive"
-                          : "bg-primary",
+                        "hidden sm:inline-block w-11 text-center rounded-full border px-1 py-0.5 text-[10px] font-medium leading-none",
+                        downloadStatusBadgeClass(task.status),
                       )}
-                      style={{ width: `${task.progress}%` }}
-                    />
+                    >
+                      {batchStatusLabel(task.status)}
+                    </span>
+                    <span className="hidden sm:block w-16 text-right text-xs tabular-nums text-muted-foreground">
+                      {formatDownloadSpeed(
+                        task.status === "downloading" ? task.speed : 0,
+                      )}
+                    </span>
+                    {task.status !== "completed" ? (
+                      <CircularProgress
+                        progress={task.progress}
+                        size={32}
+                        status={task.status}
+                      />
+                    ) : (
+                      <span className="w-8" />
+                    )}
+                    <div className="w-14 flex items-center justify-end gap-1">
+                      {isActive && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() =>
+                            task.type === "single"
+                              ? void cancelVideoDownload(task.id)
+                              : void handleCancelBatchDownloads(task)
+                          }
+                          aria-label="取消"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {task.type === "single" &&
+                        task.status === "completed" &&
+                        task.filePath && (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() =>
+                                void handleOpenDownloadedFile(
+                                  task.filePath as string,
+                                )
+                              }
+                              aria-label="播放"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            >
+                              <Play className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() =>
+                                void handleRevealDownloadedFile(
+                                  task.filePath as string,
+                                )
+                              }
+                              aria-label="在文件夹中显示"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                            >
+                              <FolderOpen className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        )}
+                      {task.type === "batch" && !isActive && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => void handleOpenBatchDirectory(task)}
+                          aria-label="打开合集目录"
+                          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                        >
+                          <FolderOpen className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
-                {task.error && (
-                  <p className="border-t border-border px-4 py-2 text-xs text-destructive">
-                    {task.error}
-                  </p>
-                )}
                 {task.type === "batch" && task.expanded && (
-                  <div className="border-t border-border bg-muted/10">
+                  <div className="border-t border-border bg-muted/30">
                     {items.map((item, index) => (
                       <div
                         key={item.id}
-                        className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+                        className="flex items-center gap-2 px-4 py-2.5 border-b border-border last:border-b-0 transition-colors hover:bg-muted/40"
                       >
-                        <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                        <span className="shrink-0 w-7 text-right text-xs tabular-nums text-muted-foreground">
                           {index + 1}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="min-w-0 flex-1 truncate text-sm">
-                              {item.title}
-                            </p>
-                            <span
-                              className={cn(
-                                "shrink-0 text-xs",
-                                downloadStatusClass(item.status),
-                              )}
-                            >
-                              {batchStatusLabel(item.status)}
-                            </span>
-                            {["failed", "cancelled"].includes(item.status) && (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() =>
-                                  void handleRetryBatchItem(task, item)
-                                }
-                                className="h-7 px-2 text-xs"
-                              >
-                                重试
-                              </Button>
-                            )}
-                            {item.status === "completed" && item.filePath && (
-                              <>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    void handleOpenDownloadedFile(
-                                      item.filePath as string,
-                                    )
-                                  }
-                                  aria-label="播放"
-                                  className="h-7 w-7 p-0"
-                                >
-                                  <Play className="h-3.5 w-3.5" />
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() =>
-                                    void handleRevealDownloadedFile(
-                                      item.filePath as string,
-                                    )
-                                  }
-                                  aria-label="在文件夹中显示"
-                                  className="h-7 w-7 p-0"
-                                >
-                                  <FolderOpen className="h-3.5 w-3.5" />
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                          <div className="mt-2 flex items-center gap-2">
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                              <div
-                                className={cn(
-                                  "h-full rounded-full transition-all duration-300",
-                                  item.status === "failed"
-                                    ? "bg-destructive"
-                                    : "bg-primary",
-                                )}
-                                style={{ width: `${item.progress}%` }}
-                              />
-                            </div>
-                            <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                              {item.progress}%
-                            </span>
-                            {item.speed > 0 && (
-                              <span className="w-20 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                                {(item.speed / 1024 / 1024).toFixed(1)}MB/s
-                              </span>
-                            )}
-                          </div>
+                          <p className="truncate text-sm">{item.title}</p>
                           {item.error && (
-                            <p className="mt-1 truncate text-xs text-destructive">
+                            <p className="truncate text-xs text-destructive">
                               {item.error}
                             </p>
                           )}
+                        </div>
+                        <div className="shrink-0 flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "w-11 text-center rounded-full border px-1 py-0.5 text-[10px] font-medium leading-none",
+                              downloadStatusBadgeClass(item.status),
+                            )}
+                          >
+                            {batchStatusLabel(item.status)}
+                          </span>
+                          {item.status !== "completed" ? (
+                            <CircularProgress
+                              progress={item.progress}
+                              size={28}
+                              status={item.status}
+                            />
+                          ) : (
+                            <span className="w-7" />
+                          )}
+                          <div className="w-14 flex items-center justify-end gap-1">
+                            {["failed", "cancelled"].includes(item.status) && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() =>
+                                  void handleRetryBatchItem(task, item)
+                                }
+                                aria-label="重试"
+                                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {item.status === "completed" && item.filePath && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() =>
+                                  void handleOpenDownloadedFile(
+                                    item.filePath as string,
+                                  )
+                                }
+                                aria-label="播放"
+                                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              >
+                                <Play className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}

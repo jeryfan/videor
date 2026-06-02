@@ -524,6 +524,7 @@ pub fn run() {
             commands::clear_download_history,
             commands::open_download_file,
             commands::reveal_download_file,
+            commands::open_directory,
         ]);
 
     let app = builder
