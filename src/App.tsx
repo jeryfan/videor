@@ -84,6 +84,7 @@ type BatchDownloadStatus =
   | "queued"
   | "parsing"
   | "downloading"
+  | "remuxing"
   | "completed"
   | "failed"
   | "cancelled";
@@ -173,6 +174,8 @@ function batchStatusLabel(status: BatchDownloadStatus): string {
       return "解析中";
     case "downloading":
       return "下载中";
+    case "remuxing":
+      return "合并中";
     case "completed":
       return "完成";
     case "failed":
@@ -186,6 +189,7 @@ function downloadStatusClass(status: BatchDownloadStatus): string {
   if (status === "completed") return "text-emerald-600";
   if (status === "failed") return "text-destructive";
   if (status === "cancelled") return "text-muted-foreground";
+  if (status === "remuxing") return "text-amber-500";
   return "text-muted-foreground";
 }
 
@@ -204,7 +208,7 @@ function hasActiveDownloadForResource(
 ): boolean {
   const keySet = new Set(resourceKeys.filter(Boolean));
   return tasks.some((task) => {
-    if (!["queued", "parsing", "downloading"].includes(task.status)) {
+    if (!["queued", "parsing", "downloading", "remuxing"].includes(task.status)) {
       return false;
     }
     if (task.resourceKey && keySet.has(task.resourceKey)) return true;
@@ -217,7 +221,7 @@ function hasActiveDownloadForResource(
 function normalizePersistedStatus(
   status: BatchDownloadStatus,
 ): BatchDownloadStatus {
-  return ["queued", "parsing", "downloading"].includes(status)
+  return ["queued", "parsing", "downloading", "remuxing"].includes(status)
     ? "cancelled"
     : status;
 }
@@ -229,6 +233,7 @@ function isBatchDownloadStatus(value: unknown): value is BatchDownloadStatus {
       "queued",
       "parsing",
       "downloading",
+      "remuxing",
       "completed",
       "failed",
       "cancelled",
@@ -328,7 +333,7 @@ function calculateBatchTaskState(
     return { status: "queued", progress: 0, speed: 0 };
   }
   const activeCount = items.filter((item) =>
-    ["queued", "parsing", "downloading"].includes(item.status),
+    ["queued", "parsing", "downloading", "remuxing"].includes(item.status),
   ).length;
   const completedCount = items.filter(
     (item) => item.status === "completed",
@@ -943,7 +948,9 @@ function App() {
                   ? "failed"
                   : progress.status === "cancelled"
                     ? "cancelled"
-                    : "downloading";
+                    : progress.status === "remuxing"
+                      ? "remuxing"
+                      : "downloading";
 
             if (task.type === "single" && task.id === progress.task_id) {
               const percent =
@@ -988,8 +995,8 @@ function App() {
               items,
               updatedAt: now,
             };
-            const wasActive = ["queued", "parsing", "downloading"].includes(prevStatus);
-            const isFinal = !["queued", "parsing", "downloading"].includes(nextTask.status);
+            const wasActive = ["queued", "parsing", "downloading", "remuxing"].includes(prevStatus);
+            const isFinal = !["queued", "parsing", "downloading", "remuxing"].includes(nextTask.status);
             if (wasActive && isFinal) {
               const completedCount = items.filter((i) => i.status === "completed").length;
               const total = items.length;
@@ -1188,7 +1195,7 @@ function App() {
 
     const activeResourceKeys = new Set(
       downloadHistoryTasks.flatMap((task) => {
-        if (!["queued", "parsing", "downloading"].includes(task.status)) {
+        if (!["queued", "parsing", "downloading", "remuxing"].includes(task.status)) {
           return [];
         }
         return [
@@ -1327,7 +1334,7 @@ function App() {
     async (task: DownloadHistoryTask) => {
       batchRunIdRef.current += 1;
       const runningTaskIds = (task.items || [])
-        .filter((item) => item.taskId && item.status === "downloading")
+        .filter((item) => item.taskId && ["downloading", "remuxing"].includes(item.status))
         .map((item) => item.taskId as string);
 
       setDownloadHistoryTasks((tasks) => {
@@ -1337,7 +1344,7 @@ function App() {
             return historyTask;
           }
           const items = (historyTask.items || []).map((item) =>
-            ["queued", "parsing", "downloading"].includes(item.status)
+            ["queued", "parsing", "downloading", "remuxing"].includes(item.status)
               ? {
                   ...item,
                   status: "cancelled" as BatchDownloadStatus,
@@ -1729,7 +1736,7 @@ function App() {
             const cancelledCount = items.filter(
               (item) => item.status === "cancelled",
             ).length;
-            const isActive = ["queued", "parsing", "downloading"].includes(
+            const isActive = ["queued", "parsing", "downloading", "remuxing"].includes(
               task.status,
             );
 

@@ -1,34 +1,15 @@
 use super::{hash_map_to_header_map, VideoFormat};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use futures_util::{stream, StreamExt};
-use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-
-static BATCH_TASKS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-
-fn mark_task_as_batch(task_id: &str) {
-    if let Ok(mut tasks) = BATCH_TASKS.lock() {
-        tasks.insert(task_id.to_string());
-    }
-}
-
-fn is_batch_task(task_id: &str) -> bool {
-    BATCH_TASKS.lock().map(|tasks| tasks.contains(task_id)).unwrap_or(false)
-}
-
-fn remove_batch_task(task_id: &str) {
-    if let Ok(mut tasks) = BATCH_TASKS.lock() {
-        tasks.remove(task_id);
-    }
-}
 
 /// 下载进度事件
 #[derive(Debug, Clone, serde::Serialize)]
@@ -45,30 +26,52 @@ pub struct DownloadProgress {
 
 /// 下载状态
 #[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum DownloadStatus {
+    Queued,
+    Parsing,
     Downloading,
+    Remuxing,
     Completed,
     Failed(String),
     Cancelled,
 }
 
+#[derive(Clone)]
+struct TaskSpec {
+    app: AppHandle,
+    task_id: String,
+    title: String,
+    format: VideoFormat,
+    save_path: PathBuf,
+    is_batch: bool,
+}
+
 struct ActiveTask {
     cancel_token: CancellationToken,
-    #[allow(dead_code)]
-    title: String,
 }
 
 #[derive(Clone)]
 pub struct DownloadManager {
-    tasks: Arc<RwLock<HashMap<String, ActiveTask>>>,
+    queue: Arc<RwLock<VecDeque<TaskSpec>>>,
+    running: Arc<RwLock<HashMap<String, ActiveTask>>>,
+    max_concurrent: Arc<AtomicUsize>,
 }
 
 impl DownloadManager {
     pub fn new() -> Self {
         Self {
-            tasks: Arc::new(RwLock::new(HashMap::new())),
+            queue: Arc::new(RwLock::new(VecDeque::new())),
+            running: Arc::new(RwLock::new(HashMap::new())),
+            max_concurrent: Arc::new(AtomicUsize::new(3)),
         }
+    }
+
+    fn refresh_max_concurrent(&self) {
+        let cfg = crate::settings::get_settings()
+            .download_concurrency
+            .clamp(1, 16) as usize;
+        self.max_concurrent.store(cfg, Ordering::Relaxed);
     }
 
     pub async fn start_download(
@@ -80,98 +83,153 @@ impl DownloadManager {
         save_path: PathBuf,
         is_batch: bool,
     ) -> Result<(), String> {
-        if is_batch {
-            mark_task_as_batch(&task_id);
-        }
         let sanitized_title = sanitize_filename(&title);
         let final_path = if format.audio_url.is_some() {
-            // DASH 格式：先下载到临时文件再合并
             save_path.join(format!("{}.mp4", sanitized_title))
         } else {
             save_path.join(format!("{}.mp4", sanitized_title))
         };
 
-        // 确保目录存在
         tokio::fs::create_dir_all(&save_path)
             .await
             .map_err(|e| format!("创建保存目录失败: {}", e))?;
 
-        let cancel_token = CancellationToken::new();
+        self.refresh_max_concurrent();
 
-        {
-            let mut tasks = self.tasks.write().await;
-            tasks.insert(
-                task_id.clone(),
-                ActiveTask {
-                    cancel_token: cancel_token.clone(),
-                    title: title.clone(),
+        // 先检查是否可以直接启动
+        let should_start = {
+            let running = self.running.read().await;
+            running.len() < self.max_concurrent.load(Ordering::Relaxed)
+        };
+
+        let spec = TaskSpec {
+            app,
+            task_id: task_id.clone(),
+            title,
+            format,
+            save_path: final_path,
+            is_batch,
+        };
+
+        if should_start {
+            self.spawn_task(spec);
+        } else {
+            let _ = spec.app.emit(
+                "video-download-progress",
+                DownloadProgress {
+                    task_id: task_id.clone(),
+                    downloaded: 0,
+                    total: None,
+                    speed: 0,
+                    status: DownloadStatus::Queued,
+                    file_path: None,
+                    is_batch: Some(is_batch),
                 },
             );
+            let mut queue = self.queue.write().await;
+            queue.push_back(spec);
         }
-
-        let tasks_ref = self.tasks.clone();
-        let task_id_clone = task_id.clone();
-
-        tokio::spawn(async move {
-            let result =
-                do_download(&app, &task_id_clone, &format, &final_path, &cancel_token).await;
-
-            // 清理任务
-            {
-                let mut tasks = tasks_ref.write().await;
-                tasks.remove(&task_id_clone);
-            }
-
-            let is_batch_flag = is_batch_task(&task_id_clone);
-            remove_batch_task(&task_id_clone);
-
-            match result {
-                Ok(()) => {
-                    let _ = app.emit(
-                        "video-download-progress",
-                        DownloadProgress {
-                            task_id: task_id_clone,
-                            downloaded: 0,
-                            total: None,
-                            speed: 0,
-                            status: DownloadStatus::Completed,
-                            file_path: final_path.to_str().map(str::to_string),
-                            is_batch: Some(is_batch_flag),
-                        },
-                    );
-                }
-                Err(e) => {
-                    let _ = app.emit(
-                        "video-download-progress",
-                        DownloadProgress {
-                            task_id: task_id_clone,
-                            downloaded: 0,
-                            total: None,
-                            speed: 0,
-                            status: DownloadStatus::Failed(e),
-                            file_path: None,
-                            is_batch: Some(is_batch_flag),
-                        },
-                    );
-                }
-            }
-        });
 
         Ok(())
     }
 
     pub async fn cancel_download(&self, task_id: &str) -> Result<(), String> {
-        let tasks = self.tasks.read().await;
-        if let Some(task) = tasks.get(task_id) {
-            task.cancel_token.cancel();
-            Ok(())
-        } else {
-            Err("下载任务不存在".to_string())
+        // 1. 尝试取消正在运行的任务
+        {
+            let running = self.running.read().await;
+            if let Some(task) = running.get(task_id) {
+                task.cancel_token.cancel();
+                return Ok(());
+            }
         }
+        // 2. 尝试从队列中移除
+        {
+            let mut queue = self.queue.write().await;
+            let before = queue.len();
+            queue.retain(|spec| spec.task_id != task_id);
+            let removed = before != queue.len();
+            if removed {
+                return Ok(());
+            }
+        }
+        Err("下载任务不存在".to_string())
+    }
+
+    fn spawn_task(&self, spec: TaskSpec) {
+        let manager = self.clone();
+        let task_id = spec.task_id.clone();
+
+        tokio::spawn(async move {
+            let cancel_token = CancellationToken::new();
+            {
+                let mut running = manager.running.write().await;
+                running.insert(
+                    task_id.clone(),
+                    ActiveTask {
+                        cancel_token: cancel_token.clone(),
+                    },
+                );
+            }
+
+            let result =
+                run_task(&spec.app, &task_id, &spec.format, &spec.save_path, &cancel_token).await;
+
+            {
+                let mut running = manager.running.write().await;
+                running.remove(&task_id);
+            }
+
+            let status = match result {
+                Ok(()) => DownloadStatus::Completed,
+                Err(e) if e == "下载已取消" => DownloadStatus::Cancelled,
+                Err(e) => DownloadStatus::Failed(e),
+            };
+
+            let file_path = matches!(&status, DownloadStatus::Completed)
+                .then(|| spec.save_path.to_str().map(str::to_string))
+                .flatten();
+
+            let _ = spec.app.emit(
+                "video-download-progress",
+                DownloadProgress {
+                    task_id: task_id.clone(),
+                    downloaded: 0,
+                    total: None,
+                    speed: 0,
+                    status,
+                    file_path,
+                    is_batch: Some(spec.is_batch),
+                },
+            );
+
+            // 尝试启动下一个排队任务
+            manager.refresh_max_concurrent();
+            let max = manager.max_concurrent.load(Ordering::Relaxed);
+            loop {
+                let should_start = {
+                    let running = manager.running.read().await;
+                    if running.len() >= max {
+                        break;
+                    }
+                    let queue = manager.queue.read().await;
+                    queue.front().is_some()
+                };
+                if !should_start {
+                    break;
+                }
+                let next_spec = {
+                    let mut queue = manager.queue.write().await;
+                    queue.pop_front()
+                };
+                if let Some(next_spec) = next_spec {
+                    manager.spawn_task(next_spec);
+                }
+            }
+        });
     }
 }
 
-async fn do_download(
+async fn run_task(
     app: &AppHandle,
     task_id: &str,
     format: &VideoFormat,
@@ -195,28 +253,25 @@ async fn do_download(
         let video_tmp = save_path.with_extension("video.tmp");
         let audio_tmp = save_path.with_extension("audio.tmp");
 
-        download_stream(
-            app,
-            task_id,
-            &client,
-            format,
-            &format.url,
-            &video_tmp,
-            cancel_token,
-        )
-        .await?;
-        download_stream(
-            app,
-            task_id,
-            &client,
-            format,
-            audio_url,
-            &audio_tmp,
-            cancel_token,
-        )
-        .await?;
+        download_stream(app, task_id, &client, format, &format.url, &video_tmp, cancel_token)
+            .await?;
+        download_stream(app, task_id, &client, format, audio_url, &audio_tmp, cancel_token)
+            .await?;
 
-        // 尝试用 ffmpeg 合并
+        // remuxing 阶段
+        let _ = app.emit(
+            "video-download-progress",
+            DownloadProgress {
+                task_id: task_id.to_string(),
+                downloaded: 0,
+                total: None,
+                speed: 0,
+                status: DownloadStatus::Remuxing,
+                file_path: None,
+                is_batch: None,
+            },
+        );
+
         let mux_result = tokio::process::Command::new("ffmpeg")
             .args([
                 "-y",
@@ -242,30 +297,14 @@ async fn do_download(
             Ok(status) if status.success() => {}
             _ => {
                 // ffmpeg 不可用或失败：只保留视频流
-                download_stream(
-                    app,
-                    task_id,
-                    &client,
-                    format,
-                    &format.url,
-                    save_path,
-                    cancel_token,
-                )
-                .await?;
+                download_stream(app, task_id, &client, format, &format.url, save_path, cancel_token)
+                    .await?;
             }
         }
     } else {
-        // 单流格式：直接下载
-        download_stream(
-            app,
-            task_id,
-            &client,
-            format,
-            &format.url,
-            save_path,
-            cancel_token,
-        )
-        .await?;
+        // 单流格式：直接下载（支持断点续传）
+        download_stream(app, task_id, &client, format, &format.url, save_path, cancel_token)
+            .await?;
     }
 
     Ok(())
@@ -399,19 +438,6 @@ async fn download_hls_concurrently(
 
     if cancel_token.is_cancelled() {
         let _ = tokio::fs::remove_dir_all(&temp_dir).await;
-        let is_batch = is_batch_task(task_id);
-        let _ = app.emit(
-            "video-download-progress",
-            DownloadProgress {
-                task_id: task_id.to_string(),
-                downloaded: 0,
-                total: Some(total_segments),
-                speed: 0,
-                status: DownloadStatus::Cancelled,
-                file_path: None,
-                is_batch: Some(is_batch),
-            },
-        );
         return Err("下载已取消".to_string());
     }
 
@@ -425,6 +451,21 @@ async fn download_hls_concurrently(
         &joined_ts,
     )
     .await?;
+
+    // remuxing 阶段
+    let _ = app.emit(
+        "video-download-progress",
+        DownloadProgress {
+            task_id: task_id.to_string(),
+            downloaded: total_segments,
+            total: Some(total_segments),
+            speed: 0,
+            status: DownloadStatus::Remuxing,
+            file_path: None,
+            is_batch: None,
+        },
+    );
+
     remux_ts_to_mp4(&joined_ts, save_path).await?;
     let _ = tokio::fs::remove_dir_all(&temp_dir).await;
     Ok(())
@@ -773,12 +814,20 @@ async fn download_stream(
     let (final_url, referer) = if is_bilibili {
         (url.to_string(), Some("https://www.bilibili.com/"))
     } else {
-        // 非B站URL：手动解析302获取CDN直链，并透传用户提供的Referer
         let resolved = resolve_cdn_url(url, extra_referer)
             .await
             .unwrap_or_else(|_| url.to_string());
         (resolved, extra_referer)
     };
+
+    // 断点续传：检查 .part 文件
+    let part_path = save_path.with_extension("mp4.part");
+    let mut start_byte = 0u64;
+    if tokio::fs::try_exists(&part_path).await.unwrap_or(false) {
+        if let Ok(meta) = tokio::fs::metadata(&part_path).await {
+            start_byte = meta.len();
+        }
+    }
 
     let dl_client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -793,26 +842,47 @@ async fn download_stream(
     if let Some(r) = referer {
         req = req.header("Referer", r);
     }
+    if start_byte > 0 {
+        req = req.header("Range", format!("bytes={}-", start_byte));
+    }
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
-    let total = resp.content_length();
+    // 检查服务器是否支持 Range
+    let supports_range = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    if !supports_range && start_byte > 0 {
+        let _ = tokio::fs::remove_file(&part_path).await;
+        start_byte = 0;
+    }
+
+    let total = if supports_range {
+        // 从 Content-Range 解析总大小
+        resp.headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split('/').last())
+            .and_then(|s| s.parse::<u64>().ok())
+    } else {
+        resp.content_length()
+    };
+
     let mut stream = resp.bytes_stream();
 
-    let mut file = tokio::fs::File::create(save_path)
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&part_path)
         .await
         .map_err(|e| format!("创建文件失败: {}", e))?;
 
-    let mut downloaded: u64 = 0;
+    let mut downloaded: u64 = start_byte;
     let mut last_report = tokio::time::Instant::now();
-    let mut last_downloaded: u64 = 0;
+    let mut last_downloaded: u64 = start_byte;
     let report_interval = tokio::time::Duration::from_millis(200);
 
     loop {
         tokio::select! {
             _ = cancel_token.cancelled() => {
                 drop(file);
-                let _ = tokio::fs::remove_file(save_path).await;
-                let is_batch = is_batch_task(task_id);
                 let _ = app.emit(
                     "video-download-progress",
                     DownloadProgress {
@@ -822,7 +892,7 @@ async fn download_stream(
                         speed: 0,
                         status: DownloadStatus::Cancelled,
                         file_path: None,
-                        is_batch: Some(is_batch),
+                        is_batch: None,
                     },
                 );
                 return Err("下载已取消".to_string());
@@ -864,7 +934,6 @@ async fn download_stream(
                     }
                     Some(Err(e)) => {
                         drop(file);
-                        let _ = tokio::fs::remove_file(save_path).await;
                         return Err(format!("下载出错: {}", e));
                     }
                     None => {
@@ -877,6 +946,11 @@ async fn download_stream(
             }
         }
     }
+
+    // 下载完成：重命名 .part 到最终文件
+    tokio::fs::rename(&part_path, save_path)
+        .await
+        .map_err(|e| format!("重命名文件失败: {}", e))?;
 
     Ok(())
 }

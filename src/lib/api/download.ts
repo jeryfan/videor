@@ -7,12 +7,19 @@ export interface DownloadProgress {
   downloaded: number;
   total: number | null;
   speed: number;
-  status: "downloading" | "completed" | "failed" | "cancelled";
+  status: DownloadStatus;
   file_path?: string | null;
   is_batch?: boolean;
 }
 
-export type DownloadStatus = DownloadProgress["status"];
+export type DownloadStatus =
+  | "queued"
+  | "parsing"
+  | "downloading"
+  | "remuxing"
+  | "completed"
+  | "failed"
+  | "cancelled";
 
 export interface DownloadTask {
   taskId: string;
