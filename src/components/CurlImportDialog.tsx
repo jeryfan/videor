@@ -151,7 +151,7 @@ export function CurlImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent zIndex="top" className="max-w-xl h-[560px] flex flex-col overflow-hidden p-0 gap-0">
+      <DialogContent zIndex="top" className="max-w-[calc(100vw-2rem)] sm:max-w-xl md:max-w-2xl lg:max-w-3xl h-[min(560px,85vh)] flex flex-col overflow-hidden p-0 gap-0">
         <DialogHeader className="relative px-6 py-5 border-b border-border bg-muted/20">
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="h-5 w-5 text-primary" />

@@ -1521,7 +1521,7 @@ function App() {
       )}
 
       <Dialog open={isBilibiliLoginOpen} onOpenChange={setIsBilibiliLoginOpen}>
-        <DialogContent zIndex="top" className="max-w-sm">
+        <DialogContent zIndex="top" className="sm:max-w-sm md:max-w-md">
           <DialogHeader>
             <DialogTitle>Bilibili 登录</DialogTitle>
             <DialogDescription>
@@ -1694,7 +1694,7 @@ function App() {
 
         <div
           className={cn(
-            "mx-auto w-full max-w-4xl flex-col gap-3 py-4",
+            "mx-auto w-full max-w-full sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl flex-col gap-3 py-4",
             showHistory ? "flex" : "hidden",
           )}
         >
@@ -1983,7 +1983,7 @@ function App() {
               : "pointer-events-none absolute inset-x-6 top-0 flex opacity-0",
           )}
         >
-          <div className="w-full max-w-4xl">
+          <div className="w-full max-w-full sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl">
             {/* 输入框 */}
             <div ref={inputWrapRef} className="sticky top-0 z-30 bg-background/95 py-2 backdrop-blur-md">
               <div className="relative">
@@ -2123,7 +2123,7 @@ function App() {
                       </Button>
                     </div>
                   </div>
-                  <div className="max-h-[calc(100vh-280px)] overflow-y-auto rounded-xl border border-border">
+                  <div className="max-h-[calc(100vh-280px)] lg:max-h-[calc(100vh-240px)] overflow-y-auto rounded-xl border border-border">
                     {videoItems.map((item, index) => {
                       const checked = selectedVideoItems.includes(item.id);
                       return (
@@ -2175,7 +2175,7 @@ function App() {
                       {videoMessage || `共 ${videoItems.length} 个候选地址`}
                     </p>
                   </div>
-                  <div className="max-h-[calc(100vh-280px)] overflow-y-auto rounded-xl border border-border">
+                  <div className="max-h-[calc(100vh-280px)] lg:max-h-[calc(100vh-240px)] overflow-y-auto rounded-xl border border-border">
                     {videoItems.map((item, index) => (
                       <button
                         key={item.id}
@@ -2211,7 +2211,7 @@ function App() {
                     src={previewVideoUrl}
                     controls
                     poster={videoCover || undefined}
-                    className="h-auto max-h-[calc(100vh-220px)] w-full rounded-xl object-contain"
+                    className="h-auto max-h-[calc(100vh-220px)] lg:max-h-[calc(100vh-180px)] w-full rounded-xl object-contain"
                   />
                   {/* 悬浮下载按钮 / 进度 */}
                   <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-end gap-2">
