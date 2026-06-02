@@ -1,10 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  Loader2,
-  RefreshCw,
-  Download,
-  Info,
-} from "lucide-react";
+import { Loader2, RefreshCw, Download, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -118,9 +113,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           <div className="space-y-2">
             <div className="flex items-center gap-2">
               <img src={appIcon} alt="Videor" className="h-5 w-5" />
-              <h4 className="text-lg font-semibold text-foreground">
-                Videor
-              </h4>
+              <h4 className="text-lg font-semibold text-foreground">Videor</h4>
             </div>
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="gap-1.5 bg-background/80">

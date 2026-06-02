@@ -112,9 +112,7 @@ pub async fn parse_video_url_with_headers(
         }
     }
 
-    Err(format!(
-        "不支持的链接格式。当前支持：抖音、B站、视频直链（mp4/webm/m3u8 等）"
-    ))
+    Err("不支持的链接格式。当前支持：抖音、B站、视频直链（mp4/webm/m3u8 等）".to_string())
 }
 
 pub fn parse_curl_headers(raw_curl: &str) -> Result<HeaderMap, String> {

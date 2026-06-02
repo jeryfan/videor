@@ -10,14 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import {
-  X,
-  Search,
-  Globe,
-  Trash2,
-  Terminal,
-  List,
-} from "lucide-react";
+import { X, Search, Globe, Trash2, Terminal, List } from "lucide-react";
 import {
   type CurlImportEntry,
   type InputFormat,
@@ -151,7 +144,10 @@ export function CurlImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent zIndex="top" className="max-w-[calc(100vw-2rem)] sm:max-w-xl md:max-w-2xl lg:max-w-3xl h-[min(560px,85vh)] flex flex-col overflow-hidden p-0 gap-0">
+      <DialogContent
+        zIndex="top"
+        className="max-w-[calc(100vw-2rem)] sm:max-w-xl md:max-w-2xl lg:max-w-3xl h-[min(560px,85vh)] flex flex-col overflow-hidden p-0 gap-0"
+      >
         <DialogHeader className="relative px-6 py-5 border-b border-border bg-muted/20">
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="h-5 w-5 text-primary" />
@@ -233,7 +229,9 @@ export function CurlImportDialog({
             <label
               className={cn(
                 "flex items-center gap-2 select-none",
-                activeTab === "keyValue" ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
+                activeTab === "keyValue"
+                  ? "opacity-50 cursor-not-allowed"
+                  : "cursor-pointer",
               )}
             >
               <input
@@ -317,10 +315,12 @@ export function CurlImportDialog({
                         : "border-border bg-muted/30",
                     )}
                   >
-                    <Globe className={cn(
-                      "h-3.5 w-3.5 shrink-0",
-                      isMatched ? "text-primary" : "text-muted-foreground",
-                    )} />
+                    <Globe
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0",
+                        isMatched ? "text-primary" : "text-muted-foreground",
+                      )}
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium truncate">
                         {entry.domain}

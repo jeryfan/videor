@@ -14,7 +14,6 @@ export interface DownloadProgress {
 
 export type DownloadStatus =
   | "queued"
-  | "parsing"
   | "downloading"
   | "remuxing"
   | "completed"

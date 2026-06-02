@@ -91,7 +91,7 @@ impl Database {
             let conn = lock_conn!(db.conn);
             let version = Self::get_user_version(&conn)?;
             drop(conn);
-            if version > 0 && version < SCHEMA_VERSION {
+            if (0..SCHEMA_VERSION).contains(&version) {
                 log::info!(
                     "Creating pre-migration database backup (v{version} → v{SCHEMA_VERSION})"
                 );

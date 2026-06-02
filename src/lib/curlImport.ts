@@ -152,7 +152,9 @@ export function detectInputFormat(text: string): InputFormat {
   return "keyValue";
 }
 
-function splitKeyValueLine(line: string): { name: string; value: string } | null {
+function splitKeyValueLine(
+  line: string,
+): { name: string; value: string } | null {
   const colonIdx = line.indexOf(":");
   const equalIdx = line.indexOf("=");
 

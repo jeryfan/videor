@@ -335,10 +335,7 @@ pub fn run() {
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
                 .tooltip("Videor") // 鼠标悬停提示
-                .on_tray_icon_event(|_tray, event| match event {
-
-                    _ => log::debug!("unhandled event {event:?}"),
-                })
+                .on_tray_icon_event(|_tray, event| log::debug!("unhandled event {event:?}"))
                 .menu(&menu)
                 .on_menu_event(|app, event| {
                     tray::handle_tray_menu_event(app, &event.id.0);

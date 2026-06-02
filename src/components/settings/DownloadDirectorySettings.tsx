@@ -21,23 +21,32 @@ export function DownloadDirectorySettings({
       const dir = await invoke<string | null>("pick_directory", {});
       if (dir) {
         onChange({ downloadDirectory: dir });
-        toast.success(t("settings.downloadDirChanged", {
-          defaultValue: "下载目录已更新",
-        }));
+        toast.success(
+          t("settings.downloadDirChanged", {
+            defaultValue: "下载目录已更新",
+          }),
+        );
       }
     } catch (error) {
-      console.error("[DownloadDirectorySettings] Failed to pick directory:", error);
-      toast.error(t("settings.downloadDirPickFailed", {
-        defaultValue: "选择目录失败",
-      }));
+      console.error(
+        "[DownloadDirectorySettings] Failed to pick directory:",
+        error,
+      );
+      toast.error(
+        t("settings.downloadDirPickFailed", {
+          defaultValue: "选择目录失败",
+        }),
+      );
     }
   };
 
   const handleResetDefault = () => {
     onChange({ downloadDirectory: undefined });
-    toast.success(t("settings.downloadDirReset", {
-      defaultValue: "已恢复为系统默认下载目录",
-    }));
+    toast.success(
+      t("settings.downloadDirReset", {
+        defaultValue: "已恢复为系统默认下载目录",
+      }),
+    );
   };
 
   return (
@@ -55,10 +64,14 @@ export function DownloadDirectorySettings({
             <FolderDown className="h-4 w-4 text-primary" />
           </div>
           <div className="space-y-1 min-w-0">
-            <p className="text-sm font-medium leading-none truncate" title={directory}>
-              {directory || t("settings.downloadDirectoryDefault", {
-                defaultValue: "系统默认下载目录",
-              })}
+            <p
+              className="text-sm font-medium leading-none truncate"
+              title={directory}
+            >
+              {directory ||
+                t("settings.downloadDirectoryDefault", {
+                  defaultValue: "系统默认下载目录",
+                })}
             </p>
             <p className="text-xs text-muted-foreground">
               {t("settings.downloadDirectoryDescription", {

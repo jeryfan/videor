@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { CheckCircle2, Download, Loader2, RefreshCw, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  Loader2,
+  RefreshCw,
+  XCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 
@@ -60,9 +66,14 @@ export function FfmpegSettings() {
           </div>
           <div className="min-w-0 space-y-1">
             <p className="truncate text-sm font-medium leading-none">
-              {status?.installed ? status.version || "已安装" : "未检测到 ffmpeg"}
+              {status?.installed
+                ? status.version || "已安装"
+                : "未检测到 ffmpeg"}
             </p>
-            <p className="truncate text-xs text-muted-foreground" title={status?.path}>
+            <p
+              className="truncate text-xs text-muted-foreground"
+              title={status?.path}
+            >
               {status?.installed
                 ? status.path || "可用于 M3U8 下载、转封装和合流"
                 : "M3U8 下载需要 ffmpeg"}
@@ -85,7 +96,11 @@ export function FfmpegSettings() {
             检测
           </Button>
           {!status?.installed && (
-            <Button size="sm" onClick={() => void handleInstall()} className="gap-1.5">
+            <Button
+              size="sm"
+              onClick={() => void handleInstall()}
+              className="gap-1.5"
+            >
               <Download className="h-3.5 w-3.5" />
               安装
             </Button>

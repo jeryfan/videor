@@ -84,7 +84,6 @@ const VIDEO_SOURCE_STORAGE_KEY = "videor-active-source";
 type VideoSource = "douyin" | "bilibili" | "m3u8" | "other";
 type BatchDownloadStatus =
   | "queued"
-  | "parsing"
   | "downloading"
   | "remuxing"
   | "completed"
@@ -173,8 +172,6 @@ function batchStatusLabel(status: BatchDownloadStatus): string {
   switch (status) {
     case "queued":
       return "等待";
-    case "parsing":
-      return "解析中";
     case "downloading":
       return "下载中";
     case "remuxing":
@@ -200,8 +197,6 @@ function downloadStatusBadgeClass(status: BatchDownloadStatus): string {
       return "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 border-amber-200 dark:border-amber-900";
     case "downloading":
       return "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400 border-blue-200 dark:border-blue-900";
-    case "parsing":
-      return "bg-purple-50 text-purple-700 dark:bg-purple-950/40 dark:text-purple-400 border-purple-200 dark:border-purple-900";
     default:
       return "bg-gray-50 text-gray-600 dark:bg-gray-900/40 dark:text-gray-400 border-gray-200 dark:border-gray-800";
   }
@@ -220,8 +215,7 @@ function CircularProgress({
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   const offset = c - (progress / 100) * c;
-  const colorClass =
-    status === "failed" ? "text-destructive" : "text-primary";
+  const colorClass = status === "failed" ? "text-destructive" : "text-primary";
   return (
     <svg width={size} height={size} className="shrink-0 -rotate-90">
       <circle
@@ -264,7 +258,7 @@ function hasActiveDownloadForResource(
 ): boolean {
   const keySet = new Set(resourceKeys.filter(Boolean));
   return tasks.some((task) => {
-    if (!["queued", "parsing", "downloading", "remuxing"].includes(task.status)) {
+    if (!["queued", "downloading", "remuxing"].includes(task.status)) {
       return false;
     }
     if (task.resourceKey && keySet.has(task.resourceKey)) return true;
@@ -277,7 +271,7 @@ function hasActiveDownloadForResource(
 function normalizePersistedStatus(
   status: BatchDownloadStatus,
 ): BatchDownloadStatus {
-  return ["queued", "parsing", "downloading", "remuxing"].includes(status)
+  return ["queued", "downloading", "remuxing"].includes(status)
     ? "cancelled"
     : status;
 }
@@ -287,7 +281,6 @@ function isBatchDownloadStatus(value: unknown): value is BatchDownloadStatus {
     typeof value === "string" &&
     [
       "queued",
-      "parsing",
       "downloading",
       "remuxing",
       "completed",
@@ -389,7 +382,7 @@ function calculateBatchTaskState(
     return { status: "queued", progress: 0, speed: 0 };
   }
   const activeCount = items.filter((item) =>
-    ["queued", "parsing", "downloading", "remuxing"].includes(item.status),
+    ["queued", "downloading", "remuxing"].includes(item.status),
   ).length;
   const completedCount = items.filter(
     (item) => item.status === "completed",
@@ -456,7 +449,7 @@ function cancelQueuedBatchItems(
       return task;
     }
     const items = task.items.map((item) =>
-      ["queued", "parsing"].includes(item.status)
+      ["queued"].includes(item.status)
         ? {
             ...item,
             status: "cancelled" as BatchDownloadStatus,
@@ -612,7 +605,8 @@ function App() {
     getInitialVideoSource,
   );
   const [downloadUrl, setDownloadUrl] = useState("");
-  const [curlImports, setCurlImports] = useState<CurlImportEntry[]>(loadCurlImports);
+  const [curlImports, setCurlImports] =
+    useState<CurlImportEntry[]>(loadCurlImports);
   const [isCurlDialogOpen, setIsCurlDialogOpen] = useState(false);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
@@ -680,12 +674,11 @@ function App() {
           ? "粘贴网页或 M3U8 播放列表链接，按 Enter 开始解析..."
           : "粘贴视频链接，按 Enter 开始解析...";
   const activeDownloadCount = downloadHistoryTasks.filter((task) =>
-    ["queued", "parsing", "downloading"].includes(task.status),
+    ["queued", "downloading"].includes(task.status),
   ).length;
   const activeBatchCount = downloadHistoryTasks.filter(
     (task) =>
-      task.type === "batch" &&
-      ["queued", "parsing", "downloading"].includes(task.status),
+      task.type === "batch" && ["queued", "downloading"].includes(task.status),
   ).length;
   const hasDownloadTasks = downloadHistoryTasks.length > 0;
   const matchedCurlEntry = getMatchedCurlEntry(downloadUrl, curlImports);
@@ -995,7 +988,10 @@ function App() {
 
     const setup = async () => {
       unlisten = await listenDownloadProgress((progress) => {
-        let batchCompletionToast: { message: string; type: "success" | "info" } | null = null;
+        let batchCompletionToast: {
+          message: string;
+          type: "success" | "info";
+        } | null = null;
 
         setDownloadHistoryTasks((tasks) => {
           const now = Date.now();
@@ -1055,10 +1051,16 @@ function App() {
               items,
               updatedAt: now,
             };
-            const wasActive = ["queued", "parsing", "downloading", "remuxing"].includes(prevStatus);
-            const isFinal = !["queued", "parsing", "downloading", "remuxing"].includes(nextTask.status);
+            const wasActive = ["queued", "downloading", "remuxing"].includes(
+              prevStatus,
+            );
+            const isFinal = !["queued", "downloading", "remuxing"].includes(
+              nextTask.status,
+            );
             if (wasActive && isFinal) {
-              const completedCount = items.filter((i) => i.status === "completed").length;
+              const completedCount = items.filter(
+                (i) => i.status === "completed",
+              ).length;
               const total = items.length;
               if (completedCount > 0) {
                 batchCompletionToast = {
@@ -1066,7 +1068,10 @@ function App() {
                   type: "success",
                 };
               } else {
-                batchCompletionToast = { message: "批量下载已结束", type: "info" };
+                batchCompletionToast = {
+                  message: "批量下载已结束",
+                  type: "info",
+                };
               }
             }
             return nextTask;
@@ -1255,7 +1260,7 @@ function App() {
 
     const activeResourceKeys = new Set(
       downloadHistoryTasks.flatMap((task) => {
-        if (!["queued", "parsing", "downloading", "remuxing"].includes(task.status)) {
+        if (!["queued", "downloading", "remuxing"].includes(task.status)) {
           return [];
         }
         return [
@@ -1325,7 +1330,7 @@ function App() {
         }
         setDownloadHistoryTasks((tasks) =>
           updateBatchItem(tasks, historyTaskId, item.id, {
-            status: "parsing",
+            status: "queued",
             error: undefined,
           }),
         );
@@ -1395,7 +1400,10 @@ function App() {
     async (task: DownloadHistoryTask) => {
       batchRunIdRef.current += 1;
       const runningTaskIds = (task.items || [])
-        .filter((item) => item.taskId && ["downloading", "remuxing"].includes(item.status))
+        .filter(
+          (item) =>
+            item.taskId && ["downloading", "remuxing"].includes(item.status),
+        )
         .map((item) => item.taskId as string);
 
       setDownloadHistoryTasks((tasks) => {
@@ -1405,7 +1413,7 @@ function App() {
             return historyTask;
           }
           const items = (historyTask.items || []).map((item) =>
-            ["queued", "parsing", "downloading", "remuxing"].includes(item.status)
+            ["queued", "downloading", "remuxing"].includes(item.status)
               ? {
                   ...item,
                   status: "cancelled" as BatchDownloadStatus,
@@ -1441,7 +1449,7 @@ function App() {
       setDownloadHistoryTasks((tasks) =>
         updateBatchItem(tasks, task.id, item.id, {
           taskId: undefined,
-          status: "parsing",
+          status: "queued",
           progress: 0,
           speed: 0,
           error: undefined,
@@ -1808,7 +1816,9 @@ function App() {
             <div className="rounded-xl border border-dashed border-border bg-muted/10 p-8 text-center">
               <Download className="mx-auto h-8 w-8 text-muted-foreground/40 mb-3" />
               <p className="text-sm text-muted-foreground">暂无下载任务</p>
-              <p className="mt-1 text-xs text-muted-foreground/60">解析视频后即可开始下载</p>
+              <p className="mt-1 text-xs text-muted-foreground/60">
+                解析视频后即可开始下载
+              </p>
             </div>
           )}
 
@@ -1823,7 +1833,7 @@ function App() {
             const cancelledCount = items.filter(
               (item) => item.status === "cancelled",
             ).length;
-            const isActive = ["queued", "parsing", "downloading", "remuxing"].includes(
+            const isActive = ["queued", "downloading", "remuxing"].includes(
               task.status,
             );
 
@@ -2054,7 +2064,10 @@ function App() {
         >
           <div className="w-full max-w-full sm:max-w-3xl md:max-w-4xl lg:max-w-5xl xl:max-w-6xl">
             {/* 输入框 */}
-            <div ref={inputWrapRef} className="sticky top-0 z-30 bg-background/95 py-2 backdrop-blur-md">
+            <div
+              ref={inputWrapRef}
+              className="sticky top-0 z-30 bg-background/95 py-2 backdrop-blur-md"
+            >
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/50" />
                 <Input
@@ -2095,7 +2108,6 @@ function App() {
                     </span>
                   )}
                 </button>
-
               </div>
             </div>
 

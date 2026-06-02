@@ -42,7 +42,7 @@ impl VideoParser for M3u8Parser {
         };
         let title = url
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("m3u8")
             .split('?')
             .next()
@@ -190,7 +190,7 @@ fn extract_m3u8_urls(base_url: &str, content: &str) -> Result<Vec<String>, Strin
 fn m3u8_candidate_title(index: usize, url: &str) -> String {
     let file = url
         .split('/')
-        .last()
+        .next_back()
         .and_then(|value| value.split('?').next())
         .filter(|value| !value.is_empty())
         .unwrap_or("video.m3u8");

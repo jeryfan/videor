@@ -23,7 +23,7 @@ impl VideoParser for DirectParser {
     ) -> Result<VideoInfo, String> {
         let title = url
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("视频")
             .split('?')
             .next()

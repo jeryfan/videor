@@ -152,7 +152,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         language: normalizedLanguage,
         downloadDirectory: serverData.downloadDirectory,
         m3u8Concurrency: serverData.m3u8Concurrency ?? 8,
-      downloadConcurrency: serverData.downloadConcurrency ?? 3,
+        downloadConcurrency: serverData.downloadConcurrency ?? 3,
       };
 
       setSettingsState(normalized);

@@ -36,5 +36,3 @@ export const extractErrorMessage = (error: unknown): string => {
 
   return "";
 };
-
-

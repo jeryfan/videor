@@ -2,7 +2,7 @@ use super::{hash_map_to_header_map, VideoFormat};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
 use futures_util::{stream, StreamExt};
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -29,7 +29,6 @@ pub struct DownloadProgress {
 #[serde(rename_all = "snake_case")]
 pub enum DownloadStatus {
     Queued,
-    Parsing,
     Downloading,
     Remuxing,
     Completed,
@@ -41,7 +40,6 @@ pub enum DownloadStatus {
 struct TaskSpec {
     app: AppHandle,
     task_id: String,
-    title: String,
     format: VideoFormat,
     save_path: PathBuf,
     is_batch: bool,
@@ -84,11 +82,7 @@ impl DownloadManager {
         is_batch: bool,
     ) -> Result<(), String> {
         let sanitized_title = sanitize_filename(&title);
-        let final_path = if format.audio_url.is_some() {
-            save_path.join(format!("{}.mp4", sanitized_title))
-        } else {
-            save_path.join(format!("{}.mp4", sanitized_title))
-        };
+        let final_path = save_path.join(format!("{}.mp4", sanitized_title));
 
         tokio::fs::create_dir_all(&save_path)
             .await
@@ -105,7 +99,6 @@ impl DownloadManager {
         let spec = TaskSpec {
             app,
             task_id: task_id.clone(),
-            title,
             format,
             save_path: final_path,
             is_batch,
@@ -233,7 +226,7 @@ async fn run_task(
     app: &AppHandle,
     task_id: &str,
     format: &VideoFormat,
-    save_path: &PathBuf,
+    save_path: &Path,
     cancel_token: &CancellationToken,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
@@ -333,7 +326,7 @@ async fn download_hls_concurrently(
     app: &AppHandle,
     task_id: &str,
     format: &VideoFormat,
-    save_path: &PathBuf,
+    save_path: &Path,
     cancel_token: &CancellationToken,
     concurrency: usize,
 ) -> Result<(), String> {
@@ -622,9 +615,9 @@ async fn concat_hls_segments(
     client: &reqwest::Client,
     headers: &HashMap<String, String>,
     init_map_url: Option<&str>,
-    temp_dir: &PathBuf,
+    temp_dir: &Path,
     segment_count: usize,
-    output: &PathBuf,
+    output: &Path,
 ) -> Result<(), String> {
     let mut output_file = tokio::fs::File::create(output)
         .await
@@ -765,7 +758,7 @@ fn sequence_iv(sequence: u64) -> [u8; 16] {
     iv
 }
 
-async fn remux_ts_to_mp4(input: &PathBuf, output: &PathBuf) -> Result<(), String> {
+async fn remux_ts_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
     let output_result = tokio::process::Command::new("ffmpeg")
         .args([
             "-y",
@@ -800,7 +793,7 @@ async fn download_stream(
     _client: &reqwest::Client,
     format: &VideoFormat,
     url: &str,
-    save_path: &PathBuf,
+    save_path: &Path,
     cancel_token: &CancellationToken,
 ) -> Result<(), String> {
     let is_bilibili = url.contains("bilibili.com") || url.contains("bilivideo.");
@@ -859,7 +852,7 @@ async fn download_stream(
         resp.headers()
             .get("content-range")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split('/').last())
+            .and_then(|s| s.split('/').next_back())
             .and_then(|s| s.parse::<u64>().ok())
     } else {
         resp.content_length()
