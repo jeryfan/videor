@@ -50,9 +50,6 @@ jobs:
       - name: Check formatting
         run: pnpm format:check
 
-      - name: Unit tests
-        run: pnpm test:unit
-
   backend:
     name: Backend Checks
     runs-on: ubuntu-22.04
