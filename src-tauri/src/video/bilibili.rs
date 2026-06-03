@@ -287,7 +287,11 @@ fn remove_cookie_store() -> Result<(), String> {
     Ok(())
 }
 
-async fn parse_video(client: &reqwest::Client, url: &str, cookie: &str) -> Result<VideoInfo, String> {
+async fn parse_video(
+    client: &reqwest::Client,
+    url: &str,
+    cookie: &str,
+) -> Result<VideoInfo, String> {
     let bvid = extract_bvid(url)?;
     let selected_page = extract_page(url).unwrap_or(1);
 

@@ -168,7 +168,14 @@ pub async fn start_video_download(
     let app_clone = app.clone();
     let manager = app.state::<DownloadManager>();
     manager
-        .start_download(app_clone, task_id.clone(), title, format, save_path, is_batch)
+        .start_download(
+            app_clone,
+            task_id.clone(),
+            title,
+            format,
+            save_path,
+            is_batch,
+        )
         .await?;
 
     Ok(task_id)

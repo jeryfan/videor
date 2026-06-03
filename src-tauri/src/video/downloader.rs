@@ -166,8 +166,14 @@ impl DownloadManager {
                 );
             }
 
-            let result =
-                run_task(&spec.app, &task_id, &spec.format, &spec.save_path, &cancel_token).await;
+            let result = run_task(
+                &spec.app,
+                &task_id,
+                &spec.format,
+                &spec.save_path,
+                &cancel_token,
+            )
+            .await;
 
             {
                 let mut running = manager.running.write().await;
@@ -248,10 +254,26 @@ async fn run_task(
         let video_tmp = save_path.with_extension("video.tmp");
         let audio_tmp = save_path.with_extension("audio.tmp");
 
-        download_stream(app, task_id, &client, format, &format.url, &video_tmp, cancel_token)
-            .await?;
-        download_stream(app, task_id, &client, format, audio_url, &audio_tmp, cancel_token)
-            .await?;
+        download_stream(
+            app,
+            task_id,
+            &client,
+            format,
+            &format.url,
+            &video_tmp,
+            cancel_token,
+        )
+        .await?;
+        download_stream(
+            app,
+            task_id,
+            &client,
+            format,
+            audio_url,
+            &audio_tmp,
+            cancel_token,
+        )
+        .await?;
 
         // remuxing 阶段
         let _ = app.emit(
@@ -292,14 +314,30 @@ async fn run_task(
             Ok(status) if status.success() => {}
             _ => {
                 // ffmpeg 不可用或失败：只保留视频流
-                download_stream(app, task_id, &client, format, &format.url, save_path, cancel_token)
-                    .await?;
+                download_stream(
+                    app,
+                    task_id,
+                    &client,
+                    format,
+                    &format.url,
+                    save_path,
+                    cancel_token,
+                )
+                .await?;
             }
         }
     } else {
         // 单流格式：直接下载（支持断点续传）
-        download_stream(app, task_id, &client, format, &format.url, save_path, cancel_token)
-            .await?;
+        download_stream(
+            app,
+            task_id,
+            &client,
+            format,
+            &format.url,
+            save_path,
+            cancel_token,
+        )
+        .await?;
     }
 
     // 下载完成后自动操作
@@ -996,10 +1034,7 @@ async fn resolve_cdn_url(url: &str, referer: Option<&str>) -> Result<String, Str
     if let Some(r) = referer {
         req = req.header("Referer", r);
     }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if resp.status().is_redirection() {
         if let Some(location) = resp.headers().get("location") {
@@ -1027,9 +1062,28 @@ fn sanitize_filename(name: &str) -> String {
     let lower = result.to_ascii_lowercase();
     if matches!(
         lower.as_str(),
-        "con" | "prn" | "aux" | "nul"
-            | "com1" | "com2" | "com3" | "com4" | "com5" | "com6" | "com7" | "com8" | "com9"
-            | "lpt1" | "lpt2" | "lpt3" | "lpt4" | "lpt5" | "lpt6" | "lpt7" | "lpt8" | "lpt9"
+        "con"
+            | "prn"
+            | "aux"
+            | "nul"
+            | "com1"
+            | "com2"
+            | "com3"
+            | "com4"
+            | "com5"
+            | "com6"
+            | "com7"
+            | "com8"
+            | "com9"
+            | "lpt1"
+            | "lpt2"
+            | "lpt3"
+            | "lpt4"
+            | "lpt5"
+            | "lpt6"
+            | "lpt7"
+            | "lpt8"
+            | "lpt9"
     ) {
         result.push_str("_video");
     }
