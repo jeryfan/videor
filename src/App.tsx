@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -601,6 +601,13 @@ function App() {
   const { t } = useTranslation();
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historySourceFilter, setHistorySourceFilter] = useState<
+    VideoSource | "all"
+  >("all");
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<
+    "all" | "active" | "completed" | "failed"
+  >("all");
   const [activeSource, setActiveSource] = useState<VideoSource>(
     getInitialVideoSource,
   );
@@ -681,6 +688,41 @@ function App() {
       task.type === "batch" && ["queued", "downloading"].includes(task.status),
   ).length;
   const hasDownloadTasks = downloadHistoryTasks.length > 0;
+
+  const filteredHistoryTasks = useMemo(() => {
+    const query = historySearch.trim().toLowerCase();
+    return downloadHistoryTasks.filter((task) => {
+      if (historySourceFilter !== "all" && task.source !== historySourceFilter)
+        return false;
+      if (historyStatusFilter !== "all") {
+        if (historyStatusFilter === "active") {
+          if (!["queued", "downloading", "remuxing"].includes(task.status))
+            return false;
+        } else if (historyStatusFilter === "completed") {
+          if (task.status !== "completed") return false;
+        } else if (historyStatusFilter === "failed") {
+          if (task.status !== "failed") return false;
+        }
+      }
+      if (query) {
+        if (task.title.toLowerCase().includes(query)) return true;
+        if (
+          task.type === "batch" &&
+          task.items?.some((item) => item.title.toLowerCase().includes(query))
+        ) {
+          return true;
+        }
+        return false;
+      }
+      return true;
+    });
+  }, [
+    downloadHistoryTasks,
+    historySourceFilter,
+    historyStatusFilter,
+    historySearch,
+  ]);
+
   const matchedCurlEntry = getMatchedCurlEntry(downloadUrl, curlImports);
 
   useEffect(() => {
@@ -1799,16 +1841,75 @@ function App() {
           )}
         >
           {hasDownloadTasks && (
-            <div className="flex items-center justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleClearDownloadHistory()}
-                disabled={activeDownloadCount > 0 || Boolean(downloadTaskId)}
-                className="h-8 px-3 text-xs text-muted-foreground"
-              >
-                清空记录
-              </Button>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[180px]">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+                  <Input
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    placeholder="搜索任务..."
+                    className="h-9 pl-8 text-sm"
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant={
+                      historySourceFilter === "all" ? "secondary" : "ghost"
+                    }
+                    size="sm"
+                    onClick={() => setHistorySourceFilter("all")}
+                    className="h-8 px-2 text-xs"
+                  >
+                    全部
+                  </Button>
+                  {VIDEO_SOURCES.map(({ id, label, icon: Icon }) => (
+                    <Button
+                      key={id}
+                      variant={
+                        historySourceFilter === id ? "secondary" : "ghost"
+                      }
+                      size="icon"
+                      onClick={() => setHistorySourceFilter(id)}
+                      aria-label={label}
+                      className="h-8 w-8"
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1">
+                  {[
+                    { key: "all" as const, label: "全部" },
+                    { key: "active" as const, label: "进行中" },
+                    { key: "completed" as const, label: "已完成" },
+                    { key: "failed" as const, label: "失败" },
+                  ].map(({ key, label }) => (
+                    <Button
+                      key={key}
+                      variant={
+                        historyStatusFilter === key ? "secondary" : "ghost"
+                      }
+                      size="sm"
+                      onClick={() => setHistoryStatusFilter(key)}
+                      className="h-8 px-2 text-xs"
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleClearDownloadHistory()}
+                  disabled={activeDownloadCount > 0 || Boolean(downloadTaskId)}
+                  className="h-8 px-3 text-xs text-muted-foreground"
+                >
+                  清空记录
+                </Button>
+              </div>
             </div>
           )}
 
@@ -1822,7 +1923,17 @@ function App() {
             </div>
           )}
 
-          {downloadHistoryTasks.map((task) => {
+          {hasDownloadTasks && filteredHistoryTasks.length === 0 && (
+            <div className="rounded-xl border border-dashed border-border bg-muted/10 p-8 text-center">
+              <Search className="mx-auto h-8 w-8 text-muted-foreground/40 mb-3" />
+              <p className="text-sm text-muted-foreground">无匹配结果</p>
+              <p className="mt-1 text-xs text-muted-foreground/60">
+                尝试调整搜索词或过滤条件
+              </p>
+            </div>
+          )}
+
+          {filteredHistoryTasks.map((task) => {
             const items = task.items || [];
             const completedCount = items.filter(
               (item) => item.status === "completed",
