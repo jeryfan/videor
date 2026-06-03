@@ -28,6 +28,10 @@ pub struct AppSettings {
     pub m3u8_concurrency: u8,
     #[serde(default = "default_download_concurrency")]
     pub download_concurrency: u8,
+    #[serde(default)]
+    pub download_speed_limit: u32,
+    #[serde(default)]
+    pub auto_open_after_download: Option<String>,
 }
 
 fn default_show_in_tray() -> bool {
@@ -46,6 +50,10 @@ fn default_download_concurrency() -> u8 {
     3
 }
 
+fn default_auto_open() -> Option<String> {
+    Some("none".to_string())
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -58,6 +66,8 @@ impl Default for AppSettings {
             download_directory: dirs::download_dir().map(|p| p.to_string_lossy().to_string()),
             m3u8_concurrency: default_m3u8_concurrency(),
             download_concurrency: default_download_concurrency(),
+            download_speed_limit: 0,
+            auto_open_after_download: default_auto_open(),
         }
     }
 }
@@ -85,6 +95,12 @@ impl AppSettings {
             .filter(|s| !s.is_empty());
         self.m3u8_concurrency = self.m3u8_concurrency.clamp(1, 16);
         self.download_concurrency = self.download_concurrency.clamp(1, 16);
+        self.auto_open_after_download = self
+            .auto_open_after_download
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(default_auto_open);
     }
 
     fn load_from_file() -> Self {

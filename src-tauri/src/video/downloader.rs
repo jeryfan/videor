@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_opener::OpenerExt;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -298,6 +300,23 @@ async fn run_task(
         // 单流格式：直接下载（支持断点续传）
         download_stream(app, task_id, &client, format, &format.url, save_path, cancel_token)
             .await?;
+    }
+
+    // 下载完成后自动操作
+    if let Some(action) = crate::settings::get_settings().auto_open_after_download {
+        match action.as_str() {
+            "open" => {
+                let _ = app
+                    .opener()
+                    .open_path(save_path.to_str().unwrap_or_default(), None::<&str>);
+            }
+            "reveal" => {
+                let _ = app
+                    .opener()
+                    .reveal_item_in_dir(save_path.to_str().unwrap_or_default());
+            }
+            _ => {}
+        }
     }
 
     Ok(())
@@ -871,6 +890,9 @@ async fn download_stream(
     let mut last_report = tokio::time::Instant::now();
     let mut last_downloaded: u64 = start_byte;
     let report_interval = tokio::time::Duration::from_millis(200);
+    let speed_limit = crate::settings::get_settings().download_speed_limit;
+    let speed_limit_bytes = speed_limit as u64 * 1024;
+    let stream_start = tokio::time::Instant::now();
 
     loop {
         tokio::select! {
@@ -898,6 +920,16 @@ async fn download_stream(
                             .map_err(|e| format!("写入文件失败: {}", e))?;
 
                         downloaded += bytes.len() as u64;
+
+                        // 限速控制（仅对本次会话新下载的字节）
+                        if speed_limit_bytes > 0 {
+                            let new_bytes = downloaded.saturating_sub(start_byte);
+                            let elapsed = stream_start.elapsed().as_secs_f64();
+                            let expected = new_bytes as f64 / speed_limit_bytes as f64;
+                            if expected > elapsed {
+                                tokio::time::sleep(Duration::from_secs_f64(expected - elapsed)).await;
+                            }
+                        }
 
                         let now = tokio::time::Instant::now();
                         if now.duration_since(last_report) >= report_interval {

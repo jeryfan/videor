@@ -24,6 +24,10 @@ export interface Settings {
   downloadDirectory?: string;
   // 同时下载任务数（队列并发）
   downloadConcurrency?: number;
+  // 下载限速（KB/s，0 表示不限速）
+  downloadSpeedLimit?: number;
+  // 下载完成后自动操作：none / open / reveal
+  autoOpenAfterDownload?: "none" | "open" | "reveal";
   // M3U8 分片并发下载数
   m3u8Concurrency?: number;
 

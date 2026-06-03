@@ -95,6 +95,9 @@ export function useSettingsForm(): UseSettingsFormResult {
       language: normalizedLanguage,
       downloadDirectory: data.downloadDirectory,
       m3u8Concurrency: data.m3u8Concurrency ?? 8,
+      downloadConcurrency: data.downloadConcurrency ?? 3,
+      downloadSpeedLimit: data.downloadSpeedLimit ?? 0,
+      autoOpenAfterDownload: data.autoOpenAfterDownload ?? "none",
     };
 
     setSettingsState(normalized);
@@ -116,6 +119,8 @@ export function useSettingsForm(): UseSettingsFormResult {
             downloadDirectory: undefined,
             m3u8Concurrency: 8,
             downloadConcurrency: 3,
+            downloadSpeedLimit: 0,
+            autoOpenAfterDownload: "none",
           } as SettingsFormState);
 
         const next: SettingsFormState = {
@@ -153,6 +158,8 @@ export function useSettingsForm(): UseSettingsFormResult {
         downloadDirectory: serverData.downloadDirectory,
         m3u8Concurrency: serverData.m3u8Concurrency ?? 8,
         downloadConcurrency: serverData.downloadConcurrency ?? 3,
+        downloadSpeedLimit: serverData.downloadSpeedLimit ?? 0,
+        autoOpenAfterDownload: serverData.autoOpenAfterDownload ?? "none",
       };
 
       setSettingsState(normalized);
