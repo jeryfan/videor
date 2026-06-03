@@ -32,6 +32,8 @@ pub struct AppSettings {
     pub download_speed_limit: u32,
     #[serde(default)]
     pub auto_open_after_download: Option<String>,
+    #[serde(default)]
+    pub auto_classify_downloads: bool,
 }
 
 fn default_show_in_tray() -> bool {
@@ -68,6 +70,7 @@ impl Default for AppSettings {
             download_concurrency: default_download_concurrency(),
             download_speed_limit: 0,
             auto_open_after_download: default_auto_open(),
+            auto_classify_downloads: false,
         }
     }
 }

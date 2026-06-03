@@ -98,6 +98,7 @@ export function useSettingsForm(): UseSettingsFormResult {
       downloadConcurrency: data.downloadConcurrency ?? 3,
       downloadSpeedLimit: data.downloadSpeedLimit ?? 0,
       autoOpenAfterDownload: data.autoOpenAfterDownload ?? "none",
+      autoClassifyDownloads: data.autoClassifyDownloads ?? false,
     };
 
     setSettingsState(normalized);
@@ -121,6 +122,7 @@ export function useSettingsForm(): UseSettingsFormResult {
             downloadConcurrency: 3,
             downloadSpeedLimit: 0,
             autoOpenAfterDownload: "none",
+            autoClassifyDownloads: false,
           } as SettingsFormState);
 
         const next: SettingsFormState = {
@@ -160,6 +162,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         downloadConcurrency: serverData.downloadConcurrency ?? 3,
         downloadSpeedLimit: serverData.downloadSpeedLimit ?? 0,
         autoOpenAfterDownload: serverData.autoOpenAfterDownload ?? "none",
+        autoClassifyDownloads: serverData.autoClassifyDownloads ?? false,
       };
 
       setSettingsState(normalized);

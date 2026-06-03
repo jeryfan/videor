@@ -9,6 +9,7 @@
     "about": "关于",
     "version": "版本",
     "unknown": "未知",
+    "all": "全部",
     "clear": "清空"
   },
   "header": {
@@ -20,6 +21,15 @@
   "settings": {
     "title": "设置",
     "tabGeneral": "通用",
+    "tabDownload": "下载",
+    "downloadConcurrency": "同时下载任务数",
+    "downloadConcurrencyHint": "整个应用同时下载几个不同的视频，其余任务排队等待",
+    "m3u8Concurrency": "M3U8 分片并发数",
+    "m3u8ConcurrencyHint": "单个 M3U8 视频同时下载几个 .ts 分片，数值越大越快但占用带宽越多",
+    "speedLimit": "下载限速",
+    "speedLimitHint": "0 表示不限速，限制单线程下载的最高速度",
+    "autoOpenAfterDownload": "下载完成后自动操作",
+    "autoOpenAfterDownloadHint": "单个视频下载完成后自动执行的操作",
     "advanced": {
       "globalProxy": {
         "title": "全局出站代理",
@@ -92,11 +102,116 @@
     "historyTitle": "下载历史",
     "noHistory": "暂无下载记录",
     "urlPlaceholder": "粘贴视频链接，按 Enter 开始下载...",
+    "searchPlaceholder": "搜索任务...",
+    "clearHistory": "清空记录",
+    "emptyTitle": "暂无下载任务",
+    "emptyHint": "解析视频后即可开始下载",
+    "noFilterResult": "无匹配结果",
+    "noFilterResultHint": "尝试调整搜索词或过滤条件",
+    "singleTask": "单视频",
+    "batchSummary": "批量任务 · 共 {{count}} 个 · 完成 {{completed}} 个",
+    "batchFailed": "失败 {{count}} 个",
+    "batchCancelled": "取消 {{count}} 个",
+    "unknownSource": "其他",
+    "sessionInterrupted": "应用已退出，任务已停止",
+    "clearBlocked": "仍有下载任务进行中，无法清空历史",
+    "clearFailed": "清空下载历史失败",
     "status": {
-      "pending": "等待中",
+      "queued": "等待",
       "downloading": "下载中",
-      "completed": "已完成",
-      "failed": "失败"
+      "remuxing": "合并中",
+      "completed": "完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    },
+    "action": {
+      "collapse": "收起",
+      "expand": "展开",
+      "cancel": "取消",
+      "play": "播放",
+      "reveal": "在文件夹中显示",
+      "openFolder": "打开合集目录",
+      "retry": "重试",
+      "close": "关闭",
+      "selectAll": "全选",
+      "deselectAll": "取消全选",
+      "startBatch": "批量下载"
     }
+  },
+  "video": {
+    "parsing": "正在解析视频...",
+    "parseFailed": "视频解析失败",
+    "parsingFailed": "解析失败，请检查链接是否正确",
+    "infoIncomplete": "视频信息不完整，无法下载",
+    "alreadyDownloading": "该视频正在下载中",
+    "noSaveDir": "未选择保存目录",
+    "downloadComplete": "下载完成",
+    "downloadFailed": "下载失败",
+    "downloadCancelled": "下载已取消",
+    "startDownloadFailed": "启动下载失败",
+    "itemError": "{{title}}: {{message}}",
+    "notFoundQuality": "未找到可下载清晰度",
+    "sourceLabel": "来源: {{label}}",
+    "qualityLabel": "清晰度:",
+    "startDownload": "开始下载: {{title}}",
+    "openFileFailed": "播放文件失败",
+    "revealFileFailed": "打开文件夹失败",
+    "openDirFailed": "打开目录失败",
+    "dirNotFound": "未找到合集目录",
+    "sources": {
+      "douyin": "抖音",
+      "bilibili": "B站",
+      "m3u8": "M3U8",
+      "other": "其他",
+      "direct": "直链"
+    },
+    "placeholders": {
+      "douyin": "粘贴抖音视频链接，按 Enter 开始解析...",
+      "bilibili": "粘贴 Bilibili 视频、合集或充电合集链接...",
+      "m3u8": "粘贴网页或 M3U8 播放列表链接，按 Enter 开始解析...",
+      "other": "粘贴视频链接，按 Enter 开始解析..."
+    },
+    "bilibili": {
+      "loginTitle": "Bilibili 登录",
+      "loginDescription": "登录信息只保存在本机，用于访问你账号有权限观看的内容。",
+      "waitingQr": "等待二维码",
+      "loginSuccess": "Bilibili 登录成功",
+      "logoutSuccess": "已退出 Bilibili 登录",
+      "generatingQr": "正在生成二维码...",
+      "scanHint": "请使用 Bilibili App 扫码登录",
+      "cancel": "取消",
+      "refreshQr": "刷新二维码",
+      "login": "登录",
+      "loggedIn": "已登录",
+      "chargingCollection": "Bilibili 权限内容",
+      "needLoginHint": "该内容需要登录后检查账号是否拥有观看权限。",
+      "scanLogin": "扫码登录",
+      "multipart": "多 P 视频 · {{count}} 个分集",
+      "collection": "合集 · {{count}} 个视频",
+      "batchTitle": "Bilibili 批量下载",
+      "batchStarted": "已开始批量解析 {{count}} 个 Bilibili 视频，保存到合集目录{{suffix}}",
+      "batchSkipped": "，已跳过 {{count}} 个正在下载的视频",
+      "batchComplete": "批量下载完成：{{completed}}/{{total}} 个视频",
+      "batchEnded": "批量下载已结束",
+      "batchDownloading": "下载中",
+      "notFoundForItem": "未找到可下载清晰度：{{title}}",
+      "autoClassify": "按平台自动分类",
+      "autoClassifyHint": "开启后自动存到 Downloads/平台/日期/ 子目录"
+    },
+    "m3u8": {
+      "candidatesTitle": "发现多个 M3U8 地址",
+      "candidatesCount": "共 {{count}} 个候选地址"
+    }
+  },
+  "updateBanner": {
+    "title": "发现新版本 {{version}}",
+    "currentVersion": "当前版本 {{version}}",
+    "later": "稍后",
+    "updateNow": "立即更新",
+    "downloading": "下载中",
+    "restartApp": "重启应用",
+    "restartLater": "稍后重启",
+    "retry": "重试",
+    "downloadFailed": "更新下载失败，请稍后重试"
   }
 }

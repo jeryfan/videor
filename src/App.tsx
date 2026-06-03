@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import {
   Settings,
@@ -55,6 +56,7 @@ import {
   type CurlImportEntry,
 } from "@/lib/curlImport";
 import { CurlImportDialog } from "@/components/CurlImportDialog";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import {
   parseVideo,
   generateBilibiliLoginQr,
@@ -168,23 +170,6 @@ function formatBatchItemTitle(index: number, title: string): string {
   return `${prefix}.${sanitizePathSegment(title || "Bilibili视频")}`;
 }
 
-function batchStatusLabel(status: BatchDownloadStatus): string {
-  switch (status) {
-    case "queued":
-      return "等待";
-    case "downloading":
-      return "下载中";
-    case "remuxing":
-      return "合并中";
-    case "completed":
-      return "完成";
-    case "failed":
-      return "失败";
-    case "cancelled":
-      return "已取消";
-  }
-}
-
 function downloadStatusBadgeClass(status: BatchDownloadStatus): string {
   switch (status) {
     case "completed":
@@ -290,7 +275,10 @@ function isBatchDownloadStatus(value: unknown): value is BatchDownloadStatus {
   );
 }
 
-function restoreSingleDownloadTask(value: unknown): SingleDownloadTask | null {
+function restoreSingleDownloadTask(
+  value: unknown,
+  t: TFunction,
+): SingleDownloadTask | null {
   if (!value || typeof value !== "object") return null;
   const task = value as Partial<SingleDownloadTask>;
   if (
@@ -318,7 +306,7 @@ function restoreSingleDownloadTask(value: unknown): SingleDownloadTask | null {
     speed: 0,
     error:
       status === "cancelled" && task.status !== "cancelled"
-        ? "应用已退出，任务已停止"
+        ? t("download.sessionInterrupted")
         : typeof task.error === "string"
           ? task.error
           : undefined,
@@ -326,7 +314,10 @@ function restoreSingleDownloadTask(value: unknown): SingleDownloadTask | null {
   };
 }
 
-function restoreBatchDownloadItems(value: unknown): BatchDownloadItem[] {
+function restoreBatchDownloadItems(
+  value: unknown,
+  t: TFunction,
+): BatchDownloadItem[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item, index) => {
     if (!item || typeof item !== "object") return [];
@@ -365,7 +356,7 @@ function restoreBatchDownloadItems(value: unknown): BatchDownloadItem[] {
         speed: 0,
         error:
           status === "cancelled" && task.status !== "cancelled"
-            ? "应用已退出，任务已停止"
+            ? t("download.sessionInterrupted")
             : typeof task.error === "string"
               ? task.error
               : undefined,
@@ -466,7 +457,10 @@ function cancelQueuedBatchItems(
   });
 }
 
-function restoreDownloadHistoryTasks(history: any): DownloadHistoryTask[] {
+function restoreDownloadHistoryTasks(
+  history: any,
+  t: TFunction,
+): DownloadHistoryTask[] {
   const now = Date.now();
   if (Array.isArray(history?.tasks)) {
     return history.tasks.flatMap((task: any, index: number) => {
@@ -483,7 +477,7 @@ function restoreDownloadHistoryTasks(history: any): DownloadHistoryTask[] {
       }
 
       if (task.type === "batch") {
-        const items = restoreBatchDownloadItems(task.items);
+        const items = restoreBatchDownloadItems(task.items, t);
         const state = calculateBatchTaskState(items);
         return [
           {
@@ -510,7 +504,7 @@ function restoreDownloadHistoryTasks(history: any): DownloadHistoryTask[] {
         ];
       }
 
-      const restored = restoreSingleDownloadTask(task);
+      const restored = restoreSingleDownloadTask(task, t);
       if (!restored) return [];
       return [
         {
@@ -528,7 +522,7 @@ function restoreDownloadHistoryTasks(history: any): DownloadHistoryTask[] {
   }
 
   const tasks: DownloadHistoryTask[] = [];
-  const single = restoreSingleDownloadTask(history?.singleDownloadTask);
+  const single = restoreSingleDownloadTask(history?.singleDownloadTask, t);
   if (single) {
     tasks.push({
       ...single,
@@ -538,7 +532,7 @@ function restoreDownloadHistoryTasks(history: any): DownloadHistoryTask[] {
       updatedAt: now - 1,
     });
   }
-  const items = restoreBatchDownloadItems(history?.batchDownloadItems);
+  const items = restoreBatchDownloadItems(history?.batchDownloadItems, t);
   if (items.length > 0) {
     tasks.push({
       id: `batch_${now}`,
@@ -599,6 +593,14 @@ function SourceSwitcher({
 
 function App() {
   const { t } = useTranslation();
+
+  const batchStatusLabel = useCallback(
+    (status: BatchDownloadStatus) => {
+      return t(`download.status.${status}`);
+    },
+    [t],
+  );
+
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
@@ -659,11 +661,11 @@ function App() {
   const contentTopOffset = dragBarHeight + HEADER_HEIGHT;
   const videoPlatformLabel =
     videoPlatform === "douyin"
-      ? "抖音"
+      ? t("video.sources.douyin")
       : videoPlatform === "bilibili"
-        ? "B站"
+        ? t("video.sources.bilibili")
         : videoPlatform
-          ? "直链"
+          ? t("video.sources.direct")
           : "";
   const previewVideoUrl = videoFormats[selectedFormatIdx]?.preview_url
     ? videoFormats[selectedFormatIdx].preview_url
@@ -672,14 +674,15 @@ function App() {
           videoFormats[selectedFormatIdx].url,
         )}`
       : videoFormats[selectedFormatIdx]?.url;
-  const downloadPlaceholder =
-    activeSource === "douyin"
-      ? "粘贴抖音视频链接，按 Enter 开始解析..."
-      : activeSource === "bilibili"
-        ? "粘贴 Bilibili 视频、合集或充电合集链接..."
-        : activeSource === "m3u8"
-          ? "粘贴网页或 M3U8 播放列表链接，按 Enter 开始解析..."
-          : "粘贴视频链接，按 Enter 开始解析...";
+  const downloadPlaceholder = useMemo(() => {
+    const map: Record<VideoSource, string> = {
+      douyin: t("video.placeholders.douyin"),
+      bilibili: t("video.placeholders.bilibili"),
+      m3u8: t("video.placeholders.m3u8"),
+      other: t("video.placeholders.other"),
+    };
+    return map[activeSource];
+  }, [activeSource, t]);
   const activeDownloadCount = downloadHistoryTasks.filter((task) =>
     ["queued", "downloading"].includes(task.status),
   ).length;
@@ -733,7 +736,7 @@ function App() {
         const history = await getDownloadHistory();
         if (cancelled || !history) return;
 
-        setDownloadHistoryTasks(restoreDownloadHistoryTasks(history));
+        setDownloadHistoryTasks(restoreDownloadHistoryTasks(history, t));
       } catch (error) {
         console.error("[DownloadHistory] Failed to load:", error);
       } finally {
@@ -842,7 +845,7 @@ function App() {
             window.clearInterval(interval);
             setIsBilibiliLoginOpen(false);
             await refreshBilibiliStatus();
-            toast.success("Bilibili 登录成功");
+            toast.success(t("video.bilibili.loginSuccess"));
           }
         } catch (error) {
           if (!active) return;
@@ -876,7 +879,7 @@ function App() {
     try {
       await logoutBilibili();
       await refreshBilibiliStatus();
-      toast.info("已退出 Bilibili 登录");
+      toast.info(t("video.bilibili.logoutSuccess"));
     } catch (error) {
       toast.error(extractErrorMessage(error));
     }
@@ -990,7 +993,7 @@ function App() {
       setParseStatus("success");
     } catch (error) {
       console.error("[VideoParser] Failed to parse:", error);
-      toast.error(extractErrorMessage(error) || "视频解析失败");
+      toast.error(extractErrorMessage(error) || t("video.parseFailed"));
       setParseStatus("error");
     }
   }, [activeSource, downloadUrl, curlImports, t]);
@@ -1017,11 +1020,11 @@ function App() {
         setParseStatus("success");
       } catch (error) {
         console.error("[VideoParser] Failed to parse M3U8 candidate:", error);
-        toast.error(extractErrorMessage(error) || "视频解析失败");
+        toast.error(extractErrorMessage(error) || t("video.parseFailed"));
         setParseStatus("error");
       }
     },
-    [curlImports],
+    [curlImports, t],
   );
 
   // 监听下载进度
@@ -1060,7 +1063,10 @@ function App() {
                 status: nextStatus,
                 progress: nextStatus === "completed" ? 100 : percent,
                 speed: progress.speed,
-                error: progress.status === "failed" ? "下载失败" : task.error,
+                error:
+                  progress.status === "failed"
+                    ? t("video.downloadFailed")
+                    : task.error,
                 filePath: progress.file_path || task.filePath,
                 updatedAt: now,
               };
@@ -1080,7 +1086,10 @@ function App() {
                 status: nextStatus,
                 progress: nextStatus === "completed" ? 100 : percent,
                 speed: progress.speed,
-                error: progress.status === "failed" ? "下载失败" : item.error,
+                error:
+                  progress.status === "failed"
+                    ? t("video.downloadFailed")
+                    : item.error,
                 filePath: progress.file_path || item.filePath,
               };
             });
@@ -1106,12 +1115,15 @@ function App() {
               const total = items.length;
               if (completedCount > 0) {
                 batchCompletionToast = {
-                  message: `批量下载完成：${completedCount}/${total} 个视频`,
+                  message: t("video.bilibili.batchComplete", {
+                    completed: completedCount,
+                    total,
+                  }),
                   type: "success",
                 };
               } else {
                 batchCompletionToast = {
-                  message: "批量下载已结束",
+                  message: t("video.bilibili.batchEnded"),
                   type: "info",
                 };
               }
@@ -1131,7 +1143,7 @@ function App() {
 
         if (progress.status === "completed") {
           if (progress.is_batch !== true) {
-            toast.success("下载完成");
+            toast.success(t("video.downloadComplete"));
           }
           const keys = downloadTaskResourceKeysRef.current.get(
             progress.task_id,
@@ -1146,7 +1158,7 @@ function App() {
         } else if (progress.status === "failed") {
           setDownloadError("下载失败");
           if (progress.is_batch !== true) {
-            toast.error("下载失败");
+            toast.error(t("video.downloadFailed"));
           }
           const keys = downloadTaskResourceKeysRef.current.get(
             progress.task_id,
@@ -1160,7 +1172,7 @@ function App() {
           );
         } else if (progress.status === "cancelled") {
           if (progress.is_batch !== true) {
-            toast.info("下载已取消");
+            toast.info(t("video.downloadCancelled"));
           }
           const keys = downloadTaskResourceKeysRef.current.get(
             progress.task_id,
@@ -1184,7 +1196,7 @@ function App() {
 
   const handleStartDownload = useCallback(async () => {
     if (videoFormats.length === 0 || !videoTitle) {
-      toast.error("视频信息不完整，无法下载");
+      toast.error(t("video.infoIncomplete"));
       return;
     }
 
@@ -1216,7 +1228,7 @@ function App() {
       if (!dir) {
         dir = await invoke<string | null>("pick_directory", {});
         if (!dir) {
-          toast.info("未选择保存目录");
+          toast.info(t("video.noSaveDir"));
           return;
         }
         // 保存为默认目录
@@ -1232,8 +1244,20 @@ function App() {
 
       setDownloadError(null);
 
-      toast.info(`开始下载: ${videoTitle}`);
-      const taskId = await startVideoDownload(videoTitle, format, dir, false);
+      let finalDir = dir;
+      if (settingsData?.autoClassifyDownloads) {
+        const today = new Date().toISOString().slice(0, 10);
+        const platformDir = await join(dir, activeSource);
+        finalDir = await join(platformDir, today);
+      }
+
+      toast.info(t("video.startDownload", { title: videoTitle }));
+      const taskId = await startVideoDownload(
+        videoTitle,
+        format,
+        finalDir,
+        false,
+      );
       downloadTaskResourceKeysRef.current.set(taskId, resourceKeys);
       setDownloadTaskId(taskId);
       const now = Date.now();
@@ -1260,7 +1284,7 @@ function App() {
         .map((url) => downloadResourceKey(activeSource, url as string))
         .forEach((key) => activeDownloadResourceKeysRef.current.delete(key));
       console.error("[Download] Failed to start:", error);
-      toast.error(extractErrorMessage(error) || "启动下载失败");
+      toast.error(extractErrorMessage(error) || t("video.startDownloadFailed"));
     }
   }, [
     activeSource,
@@ -1276,7 +1300,7 @@ function App() {
     if (!dir) {
       dir = await invoke<string | null>("pick_directory", {});
       if (!dir) {
-        toast.info("未选择保存目录");
+        toast.info(t("video.noSaveDir"));
         return null;
       }
       try {
@@ -1296,7 +1320,7 @@ function App() {
       selectedVideoItems.includes(item.id),
     );
     if (selectedItems.length === 0) {
-      toast.error("请选择要下载的视频");
+      toast.error(t("batch.selectVideos"));
       return;
     }
 
@@ -1319,7 +1343,7 @@ function App() {
     );
     const skippedCount = selectedItems.length - downloadableItems.length;
     if (downloadableItems.length === 0) {
-      toast.info("选中的视频都在下载中");
+      toast.info(t("batch.allDownloading"));
       return;
     }
 
@@ -1391,10 +1415,12 @@ function App() {
           setDownloadHistoryTasks((tasks) =>
             updateBatchItem(tasks, historyTaskId, item.id, {
               status: "failed",
-              error: "未找到可下载清晰度",
+              error: t("video.notFoundQuality"),
             }),
           );
-          toast.error(`未找到可下载清晰度：${item.title}`);
+          toast.error(
+            t("video.bilibili.notFoundForItem", { title: item.title }),
+          );
           continue;
         }
         if (batchRunIdRef.current !== runId) break;
@@ -1503,7 +1529,7 @@ function App() {
         const info = await parseVideo(item.url);
         const format = info.formats[0];
         if (!format) {
-          throw new Error("未找到可下载清晰度");
+          throw new Error(t("video.notFoundQuality"));
         }
         const taskId = await startVideoDownload(
           formatBatchItemTitle(item.order, item.title || info.title),
@@ -1537,7 +1563,7 @@ function App() {
 
   const handleClearDownloadHistory = useCallback(async () => {
     if (activeDownloadCount > 0 || downloadTaskId) {
-      toast.error("仍有下载任务进行中，无法清空历史");
+      toast.error(t("download.clearBlocked"));
       return;
     }
 
@@ -1547,7 +1573,7 @@ function App() {
       await clearDownloadHistory();
     } catch (error) {
       console.error("[DownloadHistory] Failed to clear:", error);
-      toast.error(extractErrorMessage(error) || "清空下载历史失败");
+      toast.error(extractErrorMessage(error) || t("download.clearFailed"));
     }
   }, [activeDownloadCount, downloadTaskId]);
 
@@ -1555,7 +1581,7 @@ function App() {
     try {
       await openDownloadFile(filePath);
     } catch (error) {
-      toast.error(extractErrorMessage(error) || "播放文件失败");
+      toast.error(extractErrorMessage(error) || t("video.openFileFailed"));
     }
   }, []);
 
@@ -1563,7 +1589,7 @@ function App() {
     try {
       await revealDownloadFile(filePath);
     } catch (error) {
-      toast.error(extractErrorMessage(error) || "打开文件夹失败");
+      toast.error(extractErrorMessage(error) || t("video.revealFileFailed"));
     }
   }, []);
 
@@ -1579,13 +1605,13 @@ function App() {
         }
       }
       if (!dirPath) {
-        toast.error("未找到合集目录");
+        toast.error(t("video.dirNotFound"));
         return;
       }
       try {
         await openDirectory(dirPath);
       } catch (error) {
-        toast.error(extractErrorMessage(error) || "打开目录失败");
+        toast.error(extractErrorMessage(error) || t("video.openDirFailed"));
       }
     },
     [],
@@ -1665,9 +1691,9 @@ function App() {
       <Dialog open={isBilibiliLoginOpen} onOpenChange={setIsBilibiliLoginOpen}>
         <DialogContent zIndex="top" className="sm:max-w-sm md:max-w-md">
           <DialogHeader>
-            <DialogTitle>Bilibili 登录</DialogTitle>
+            <DialogTitle>{t("video.bilibili.loginTitle")}</DialogTitle>
             <DialogDescription>
-              登录信息只保存在本机，用于访问你账号有权限观看的内容。
+              {t("video.bilibili.loginDescription")}
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center gap-4 px-6 py-5">
@@ -1675,7 +1701,7 @@ function App() {
               {bilibiliQrImage ? (
                 <img
                   src={bilibiliQrImage}
-                  alt="Bilibili 登录二维码"
+                  alt={t("video.bilibili.loginTitle")}
                   className="h-full w-full"
                 />
               ) : (
@@ -1683,7 +1709,7 @@ function App() {
               )}
             </div>
             <p className="text-center text-sm text-muted-foreground">
-              {bilibiliLoginMessage || "等待二维码"}
+              {bilibiliLoginMessage || t("video.bilibili.waitingQr")}
             </p>
           </div>
           <DialogFooter>
@@ -1691,13 +1717,13 @@ function App() {
               variant="outline"
               onClick={() => setIsBilibiliLoginOpen(false)}
             >
-              取消
+              {t("video.bilibili.cancel")}
             </Button>
             <Button
               variant="secondary"
               onClick={() => void handleOpenBilibiliLogin()}
             >
-              刷新二维码
+              {t("video.bilibili.refreshQr")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1821,6 +1847,7 @@ function App() {
       </header>
 
       <main className="relative flex-1 min-h-0 flex flex-col overflow-y-auto animate-fade-in px-6">
+        <UpdateBanner />
         <div
           className={cn(
             "min-h-0 flex-1 flex-col",
@@ -1848,7 +1875,7 @@ function App() {
                   <Input
                     value={historySearch}
                     onChange={(e) => setHistorySearch(e.target.value)}
-                    placeholder="搜索任务..."
+                    placeholder={t("download.searchPlaceholder")}
                     className="h-9 pl-8 text-sm"
                   />
                 </div>
@@ -1861,7 +1888,7 @@ function App() {
                     onClick={() => setHistorySourceFilter("all")}
                     className="h-8 px-2 text-xs"
                   >
-                    全部
+                    {t("common.all")}
                   </Button>
                   {VIDEO_SOURCES.map(({ id, label, icon: Icon }) => (
                     <Button
@@ -1880,10 +1907,19 @@ function App() {
                 </div>
                 <div className="flex items-center gap-1">
                   {[
-                    { key: "all" as const, label: "全部" },
-                    { key: "active" as const, label: "进行中" },
-                    { key: "completed" as const, label: "已完成" },
-                    { key: "failed" as const, label: "失败" },
+                    { key: "all" as const, label: t("common.clear") },
+                    {
+                      key: "active" as const,
+                      label: t("download.status.downloading"),
+                    },
+                    {
+                      key: "completed" as const,
+                      label: t("download.status.completed"),
+                    },
+                    {
+                      key: "failed" as const,
+                      label: t("download.status.failed"),
+                    },
                   ].map(({ key, label }) => (
                     <Button
                       key={key}
@@ -1907,7 +1943,7 @@ function App() {
                   disabled={activeDownloadCount > 0 || Boolean(downloadTaskId)}
                   className="h-8 px-3 text-xs text-muted-foreground"
                 >
-                  清空记录
+                  {t("download.clearHistory")}
                 </Button>
               </div>
             </div>
@@ -1916,9 +1952,11 @@ function App() {
           {!hasDownloadTasks && (
             <div className="rounded-xl border border-dashed border-border bg-muted/10 p-8 text-center">
               <Download className="mx-auto h-8 w-8 text-muted-foreground/40 mb-3" />
-              <p className="text-sm text-muted-foreground">暂无下载任务</p>
+              <p className="text-sm text-muted-foreground">
+                {t("download.emptyTitle")}
+              </p>
               <p className="mt-1 text-xs text-muted-foreground/60">
-                解析视频后即可开始下载
+                {t("download.emptyHint")}
               </p>
             </div>
           )}
@@ -1926,9 +1964,11 @@ function App() {
           {hasDownloadTasks && filteredHistoryTasks.length === 0 && (
             <div className="rounded-xl border border-dashed border-border bg-muted/10 p-8 text-center">
               <Search className="mx-auto h-8 w-8 text-muted-foreground/40 mb-3" />
-              <p className="text-sm text-muted-foreground">无匹配结果</p>
+              <p className="text-sm text-muted-foreground">
+                {t("download.noFilterResult")}
+              </p>
               <p className="mt-1 text-xs text-muted-foreground/60">
-                尝试调整搜索词或过滤条件
+                {t("download.noFilterResultHint")}
               </p>
             </div>
           )}
@@ -2055,7 +2095,7 @@ function App() {
                                   task.filePath as string,
                                 )
                               }
-                              aria-label="播放"
+                              aria-label={t("download.action.play")}
                               className="h-7 w-7 text-muted-foreground hover:text-foreground"
                             >
                               <Play className="h-3.5 w-3.5" />
@@ -2133,7 +2173,7 @@ function App() {
                                 onClick={() =>
                                   void handleRetryBatchItem(task, item)
                                 }
-                                aria-label="重试"
+                                aria-label={t("download.action.retry")}
                                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
                               >
                                 <RotateCcw className="h-3.5 w-3.5" />
@@ -2148,7 +2188,7 @@ function App() {
                                     item.filePath as string,
                                   )
                                 }
-                                aria-label="播放"
+                                aria-label={t("download.action.play")}
                                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
                               >
                                 <Play className="h-3.5 w-3.5" />
@@ -2250,12 +2290,11 @@ function App() {
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-foreground">
                         {videoKind === "charging_collection"
-                          ? "Bilibili 权限内容"
+                          ? t("video.bilibili.chargingCollection")
                           : "Bilibili"}
                       </p>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        {videoMessage ||
-                          "该内容需要登录后检查账号是否拥有观看权限。"}
+                        {videoMessage || t("video.bilibili.needLoginHint")}
                       </p>
                     </div>
                     <Button
@@ -2263,7 +2302,7 @@ function App() {
                       onClick={() => void handleOpenBilibiliLogin()}
                       className="shrink-0"
                     >
-                      扫码登录
+                      {t("video.bilibili.scanLogin")}
                     </Button>
                   </div>
                 </div>
@@ -2280,10 +2319,14 @@ function App() {
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {videoKind === "multipart"
-                          ? `多 P 视频 · ${videoItems.length} 个分集`
-                          : `合集 · ${videoItems.length} 个视频`}
+                          ? t("video.bilibili.multipart", {
+                              count: videoItems.length,
+                            })
+                          : t("video.bilibili.collection", {
+                              count: videoItems.length,
+                            })}
                         {bilibiliStatus?.logged_in
-                          ? ` · 已登录 ${bilibiliStatus.username || ""}`
+                          ? ` · ${t("video.bilibili.loggedIn")} ${bilibiliStatus.username || ""}`
                           : ""}
                       </p>
                     </div>
@@ -2300,8 +2343,8 @@ function App() {
                         }
                       >
                         {selectedVideoItems.length === videoItems.length
-                          ? "取消全选"
-                          : "全选"}
+                          ? t("download.action.deselectAll")
+                          : t("download.action.selectAll")}
                       </Button>
                       <Button
                         size="sm"
@@ -2311,7 +2354,9 @@ function App() {
                           activeBatchCount > 0
                         }
                       >
-                        {activeBatchCount > 0 ? "下载中" : "批量下载"}
+                        {activeBatchCount > 0
+                          ? t("video.bilibili.batchDownloading")
+                          : t("download.action.startBatch")}
                       </Button>
                     </div>
                   </div>
@@ -2361,10 +2406,13 @@ function App() {
                 <div className="mt-3 animate-fade-in space-y-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium text-foreground">
-                      {videoTitle || "发现多个 M3U8 地址"}
+                      {videoTitle || t("video.m3u8.candidatesTitle")}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {videoMessage || `共 ${videoItems.length} 个候选地址`}
+                      {videoMessage ||
+                        t("video.m3u8.candidatesCount", {
+                          count: videoItems.length,
+                        })}
                     </p>
                   </div>
                   <div className="max-h-[calc(100vh-280px)] lg:max-h-[calc(100vh-240px)] overflow-y-auto rounded-xl border border-border">
@@ -2440,7 +2488,7 @@ function App() {
                     )}
                     {videoPlatformLabel && (
                       <span className="shrink-0 text-xs text-muted-foreground">
-                        来源: {videoPlatformLabel}
+                        {t("video.sourceLabel", { label: videoPlatformLabel })}
                       </span>
                     )}
                   </div>
@@ -2448,7 +2496,7 @@ function App() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground">
-                          清晰度:
+                          {t("video.qualityLabel")}
                         </span>
                         <select
                           value={selectedFormatIdx}
@@ -2476,7 +2524,7 @@ function App() {
 
             {parseStatus === "error" && (
               <div className="text-center text-sm text-destructive py-2">
-                解析失败，请检查链接是否正确
+                {t("video.parsingFailed")}
               </div>
             )}
           </div>

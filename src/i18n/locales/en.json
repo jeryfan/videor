@@ -9,6 +9,7 @@
     "about": "About",
     "version": "Version",
     "unknown": "Unknown",
+    "all": "All",
     "clear": "Clear"
   },
   "header": {
@@ -20,6 +21,15 @@
   "settings": {
     "title": "Settings",
     "tabGeneral": "General",
+    "tabDownload": "Download",
+    "downloadConcurrency": "Concurrent Downloads",
+    "downloadConcurrencyHint": "How many videos to download simultaneously, others will queue",
+    "m3u8Concurrency": "M3U8 Fragment Concurrency",
+    "m3u8ConcurrencyHint": "How many .ts fragments to download at once for a single M3U8 video",
+    "speedLimit": "Download Speed Limit",
+    "speedLimitHint": "0 means unlimited, limits max speed per thread",
+    "autoOpenAfterDownload": "Action After Download",
+    "autoOpenAfterDownloadHint": "Auto action when a single video download completes",
     "advanced": {
       "globalProxy": {
         "title": "Global Outbound Proxy",
@@ -92,11 +102,116 @@
     "historyTitle": "Download History",
     "noHistory": "No download records",
     "urlPlaceholder": "Paste video link, press Enter to start download...",
+    "searchPlaceholder": "Search tasks...",
+    "clearHistory": "Clear History",
+    "emptyTitle": "No download tasks",
+    "emptyHint": "Parse a video to start downloading",
+    "noFilterResult": "No matching results",
+    "noFilterResultHint": "Try adjusting search terms or filters",
+    "singleTask": "Single video",
+    "batchSummary": "Batch task · {{count}} total · {{completed}} completed",
+    "batchFailed": "{{count}} failed",
+    "batchCancelled": "{{count}} cancelled",
+    "unknownSource": "Other",
+    "sessionInterrupted": "Application exited, task stopped",
+    "clearBlocked": "Cannot clear history while downloads are in progress",
+    "clearFailed": "Failed to clear download history",
     "status": {
-      "pending": "Pending",
+      "queued": "Queued",
       "downloading": "Downloading",
+      "remuxing": "Remuxing",
       "completed": "Completed",
-      "failed": "Failed"
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "action": {
+      "collapse": "Collapse",
+      "expand": "Expand",
+      "cancel": "Cancel",
+      "play": "Play",
+      "reveal": "Reveal in folder",
+      "openFolder": "Open collection folder",
+      "retry": "Retry",
+      "close": "Close",
+      "selectAll": "Select All",
+      "deselectAll": "Deselect All",
+      "startBatch": "Batch Download"
     }
+  },
+  "video": {
+    "parsing": "Parsing video...",
+    "parseFailed": "Video parsing failed",
+    "parsingFailed": "Parsing failed, please check the link",
+    "infoIncomplete": "Video info incomplete, cannot download",
+    "alreadyDownloading": "This video is already downloading",
+    "noSaveDir": "No save directory selected",
+    "downloadComplete": "Download completed",
+    "downloadFailed": "Download failed",
+    "downloadCancelled": "Download cancelled",
+    "startDownloadFailed": "Failed to start download",
+    "itemError": "{{title}}: {{message}}",
+    "notFoundQuality": "No downloadable quality found",
+    "sourceLabel": "Source: {{label}}",
+    "qualityLabel": "Quality:",
+    "startDownload": "Start download: {{title}}",
+    "openFileFailed": "Failed to play file",
+    "revealFileFailed": "Failed to open folder",
+    "openDirFailed": "Failed to open directory",
+    "dirNotFound": "Collection directory not found",
+    "sources": {
+      "douyin": "Douyin",
+      "bilibili": "Bilibili",
+      "m3u8": "M3U8",
+      "other": "Other",
+      "direct": "Direct"
+    },
+    "placeholders": {
+      "douyin": "Paste Douyin video link, press Enter to parse...",
+      "bilibili": "Paste Bilibili video or collection link...",
+      "m3u8": "Paste webpage or M3U8 playlist link, press Enter to parse...",
+      "other": "Paste video link, press Enter to parse..."
+    },
+    "bilibili": {
+      "loginTitle": "Bilibili Login",
+      "loginDescription": "Login credentials are stored locally only, used to access content your account has permission to view.",
+      "waitingQr": "Waiting for QR code",
+      "loginSuccess": "Bilibili login successful",
+      "logoutSuccess": "Logged out of Bilibili",
+      "generatingQr": "Generating QR code...",
+      "scanHint": "Please scan with Bilibili App",
+      "cancel": "Cancel",
+      "refreshQr": "Refresh QR code",
+      "login": "Login",
+      "loggedIn": "Logged in",
+      "chargingCollection": "Bilibili Premium Content",
+      "needLoginHint": "This content requires login to verify account permissions.",
+      "scanLogin": "Scan to login",
+      "multipart": "Multi-part video · {{count}} episodes",
+      "collection": "Collection · {{count}} videos",
+      "batchTitle": "Bilibili Batch Download",
+      "batchStarted": "Started batch parsing {{count}} Bilibili videos, saved to collection folder{{suffix}}",
+      "batchSkipped": ", skipped {{count}} videos already downloading",
+      "batchComplete": "Batch download complete: {{completed}}/{{total}} videos",
+      "batchEnded": "Batch download ended",
+      "batchDownloading": "Downloading",
+      "notFoundForItem": "No quality found: {{title}}",
+      "autoClassify": "Auto-classify by platform",
+      "autoClassifyHint": "Save to Downloads/{platform}/{date}/ when enabled"
+    },
+    "m3u8": {
+      "candidatesTitle": "Multiple M3U8 addresses found",
+      "candidatesCount": "{{count}} candidate addresses"
+    }
+  },
+  "updateBanner": {
+    "title": "New version {{version}} available",
+    "currentVersion": "Current version {{version}}",
+    "later": "Later",
+    "updateNow": "Update Now",
+    "downloading": "Downloading",
+    "restartApp": "Restart App",
+    "restartLater": "Restart Later",
+    "retry": "Retry",
+    "downloadFailed": "Update download failed, please try again later"
   }
 }

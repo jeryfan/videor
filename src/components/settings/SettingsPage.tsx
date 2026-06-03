@@ -219,6 +219,7 @@ export function SettingsPage({
                       downloadConcurrency={settings.downloadConcurrency}
                       downloadSpeedLimit={settings.downloadSpeedLimit}
                       autoOpenAfterDownload={settings.autoOpenAfterDownload}
+                      autoClassifyDownloads={settings.autoClassifyDownloads}
                       onChange={handleAutoSave}
                     />
                     <FfmpegSettings />

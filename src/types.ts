@@ -28,6 +28,8 @@ export interface Settings {
   downloadSpeedLimit?: number;
   // 下载完成后自动操作：none / open / reveal
   autoOpenAfterDownload?: "none" | "open" | "reveal";
+  // 按平台自动分类下载目录
+  autoClassifyDownloads?: boolean;
   // M3U8 分片并发下载数
   m3u8Concurrency?: number;
 

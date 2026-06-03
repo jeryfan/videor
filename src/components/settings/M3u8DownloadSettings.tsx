@@ -1,5 +1,7 @@
 import type { SettingsFormState } from "@/hooks/useSettings";
-import { Radio, Layers, Gauge, FolderOpen } from "lucide-react";
+import { Radio, Layers, Gauge, FolderOpen, FolderTree } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { useTranslation } from "react-i18next";
 import {
   Select,
   SelectContent,
@@ -13,6 +15,7 @@ interface M3u8DownloadSettingsProps {
   downloadConcurrency: number | undefined;
   downloadSpeedLimit: number | undefined;
   autoOpenAfterDownload: "none" | "open" | "reveal" | undefined;
+  autoClassifyDownloads: boolean | undefined;
   onChange: (updates: Partial<SettingsFormState>) => void;
 }
 
@@ -33,12 +36,15 @@ export function M3u8DownloadSettings({
   downloadConcurrency,
   downloadSpeedLimit,
   autoOpenAfterDownload,
+  autoClassifyDownloads,
   onChange,
 }: M3u8DownloadSettingsProps) {
+  const { t } = useTranslation();
   const m3u8Value = concurrency ?? 8;
   const downloadValue = downloadConcurrency ?? 3;
   const speedLimitMb = Math.round((downloadSpeedLimit ?? 0) / 1024);
   const autoOpenValue = autoOpenAfterDownload ?? "none";
+  const classifyValue = autoClassifyDownloads ?? false;
 
   const handleSpeedChange = (value: string) => {
     const num = parseInt(value, 10);
@@ -51,7 +57,9 @@ export function M3u8DownloadSettings({
     <section className="space-y-4">
       <div className="flex items-center gap-2 border-b border-border/40 pb-2">
         <Layers className="h-4 w-4 text-primary" />
-        <h3 className="text-sm font-medium">下载设置</h3>
+        <h3 className="text-sm font-medium">
+          {t("settings.tabDownload", { defaultValue: "下载" })}
+        </h3>
       </div>
 
       <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card/50 p-4 transition-colors hover:bg-muted/50">
@@ -61,10 +69,10 @@ export function M3u8DownloadSettings({
           </div>
           <div className="min-w-0 space-y-1">
             <p className="truncate text-sm font-medium leading-none">
-              同时下载任务数
+              {t("settings.downloadConcurrency")}
             </p>
             <p className="text-xs text-muted-foreground">
-              整个应用同时下载几个不同的视频，其余任务排队等待
+              {t("settings.downloadConcurrencyHint")}
             </p>
           </div>
         </div>
@@ -94,10 +102,10 @@ export function M3u8DownloadSettings({
           </div>
           <div className="min-w-0 space-y-1">
             <p className="truncate text-sm font-medium leading-none">
-              M3U8 分片并发数
+              {t("settings.m3u8Concurrency")}
             </p>
             <p className="text-xs text-muted-foreground">
-              单个 M3U8 视频同时下载几个 .ts 分片，数值越大越快但占用带宽越多
+              {t("settings.m3u8ConcurrencyHint")}
             </p>
           </div>
         </div>
@@ -127,10 +135,10 @@ export function M3u8DownloadSettings({
           </div>
           <div className="min-w-0 space-y-1">
             <p className="truncate text-sm font-medium leading-none">
-              下载限速
+              {t("settings.speedLimit")}
             </p>
             <p className="text-xs text-muted-foreground">
-              0 表示不限速，限制单线程下载的最高速度
+              {t("settings.speedLimitHint")}
             </p>
           </div>
         </div>
@@ -155,10 +163,10 @@ export function M3u8DownloadSettings({
           </div>
           <div className="min-w-0 space-y-1">
             <p className="truncate text-sm font-medium leading-none">
-              下载完成后自动操作
+              {t("settings.autoOpenAfterDownload")}
             </p>
             <p className="text-xs text-muted-foreground">
-              单个视频下载完成后自动执行的操作
+              {t("settings.autoOpenAfterDownloadHint")}
             </p>
           </div>
         </div>
@@ -181,6 +189,28 @@ export function M3u8DownloadSettings({
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card/50 p-4 transition-colors hover:bg-muted/50">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-border">
+            <FolderTree className="h-4 w-4 text-primary" />
+          </div>
+          <div className="min-w-0 space-y-1">
+            <p className="truncate text-sm font-medium leading-none">
+              {t("video.bilibili.autoClassify")}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {t("video.bilibili.autoClassifyHint")}
+            </p>
+          </div>
+        </div>
+        <Switch
+          checked={classifyValue}
+          onCheckedChange={(checked) =>
+            onChange({ autoClassifyDownloads: checked })
+          }
+        />
       </div>
     </section>
   );
