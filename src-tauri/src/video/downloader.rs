@@ -400,6 +400,31 @@ async fn download_hls_concurrently(
     }
     let key_map = Arc::new(fetch_hls_keys(&client, &segments, &format.headers).await?);
 
+    // 预获取每个分片大小，用于精确字节进度
+    let urls: Vec<String> = segments.iter().map(|s| s.url.clone()).collect();
+    let segment_sizes: Vec<Option<u64>> = stream::iter(urls)
+        .map(|url| {
+            let client = client.clone();
+            let headers = format.headers.clone();
+            async move {
+                let mut req = client.head(&url);
+                if !headers.is_empty() {
+                    req = req.headers(hash_map_to_header_map(&headers));
+                }
+                match req.send().await {
+                    Ok(resp) => resp
+                        .headers()
+                        .get("content-length")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok()),
+                    Err(_) => None,
+                }
+            }
+        })
+        .buffer_unordered(concurrency.max(1))
+        .collect::<Vec<_>>()
+        .await;
+
     let temp_dir = save_path.with_extension(format!(
         "hls-{}",
         uuid::Uuid::new_v4().to_string().replace('-', "")
@@ -415,8 +440,14 @@ async fn download_hls_concurrently(
     let app_clone = app.clone();
     let task_id_string = task_id.to_string();
 
-    let results = stream::iter(segments.iter().cloned())
-        .map(|segment| {
+    let total_bytes: Option<u64> = if segment_sizes.iter().all(|s| s.is_some()) {
+        Some(segment_sizes.iter().filter_map(|s| *s).sum())
+    } else {
+        None
+    };
+
+    let results = stream::iter(segments.iter().cloned().enumerate())
+        .map(|(index, segment)| {
             let client = client.clone();
             let headers = format.headers.clone();
             let key_map = key_map.clone();
@@ -426,6 +457,7 @@ async fn download_hls_concurrently(
             let last_report = last_report.clone();
             let app = app_clone.clone();
             let task_id = task_id_string.clone();
+            let segment_size = segment_sizes.get(index).copied().flatten();
             async move {
                 let bytes =
                     download_hls_segment(&client, &segment.url, &headers, &cancel_token).await?;
@@ -441,15 +473,17 @@ async fn download_hls_concurrently(
 
                 let mut state = completed.lock().await;
                 state.0 += 1;
-                state.1 += bytes.len() as u64;
+                // 优先使用实际分片大小，HEAD 获取不到的用实际下载字节
+                state.1 += segment_size.unwrap_or(bytes.len() as u64);
                 let downloaded_segments = state.0;
                 let downloaded_bytes = state.1;
                 drop(state);
 
                 let mut report_at = last_report.lock().await;
                 let now = tokio::time::Instant::now();
+                let is_done = downloaded_segments == total_segments;
                 if now.duration_since(*report_at) >= tokio::time::Duration::from_millis(300)
-                    || downloaded_segments == total_segments
+                    || is_done
                 {
                     let elapsed = now.duration_since(started_at).as_secs_f64();
                     let speed = if elapsed > 0.0 {
@@ -457,12 +491,17 @@ async fn download_hls_concurrently(
                     } else {
                         0
                     };
+                    let (downloaded, total) = if let Some(total) = total_bytes {
+                        (downloaded_bytes.min(total), Some(total))
+                    } else {
+                        (downloaded_segments, Some(total_segments))
+                    };
                     let _ = app.emit(
                         "video-download-progress",
                         DownloadProgress {
                             task_id,
-                            downloaded: downloaded_segments,
-                            total: Some(total_segments),
+                            downloaded,
+                            total,
                             speed,
                             status: DownloadStatus::Downloading,
                             file_path: None,
@@ -1135,3 +1174,4 @@ video0.ts
         assert_eq!(key.iv, sequence_iv(0));
     }
 }
+
