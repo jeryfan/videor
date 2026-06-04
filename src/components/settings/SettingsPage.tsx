@@ -220,6 +220,7 @@ export function SettingsPage({
                       downloadSpeedLimit={settings.downloadSpeedLimit}
                       autoOpenAfterDownload={settings.autoOpenAfterDownload}
                       autoClassifyDownloads={settings.autoClassifyDownloads}
+                      batchParseIntervalMs={settings.batchParseIntervalMs}
                       onChange={handleAutoSave}
                     />
                     <FfmpegSettings />

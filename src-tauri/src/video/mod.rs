@@ -260,13 +260,10 @@ pub fn extract_url_from_text(text: &str) -> Option<String> {
 }
 
 /// 创建共享 HTTP 客户端
+///
+/// 优先使用全局代理配置过的客户端，若全局客户端未就绪则回退到默认配置。
 pub fn create_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .expect("failed to build http client")
+    crate::proxy::http_client::get_client()
 }
 
 #[cfg(test)]

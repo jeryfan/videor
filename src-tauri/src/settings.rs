@@ -34,6 +34,8 @@ pub struct AppSettings {
     pub auto_open_after_download: Option<String>,
     #[serde(default)]
     pub auto_classify_downloads: bool,
+    #[serde(default = "default_batch_parse_interval_ms")]
+    pub batch_parse_interval_ms: u32,
 }
 
 fn default_show_in_tray() -> bool {
@@ -50,6 +52,10 @@ fn default_m3u8_concurrency() -> u8 {
 
 fn default_download_concurrency() -> u8 {
     3
+}
+
+fn default_batch_parse_interval_ms() -> u32 {
+    1500
 }
 
 fn default_auto_open() -> Option<String> {
@@ -71,6 +77,7 @@ impl Default for AppSettings {
             download_speed_limit: 0,
             auto_open_after_download: default_auto_open(),
             auto_classify_downloads: false,
+            batch_parse_interval_ms: default_batch_parse_interval_ms(),
         }
     }
 }
@@ -98,6 +105,7 @@ impl AppSettings {
             .filter(|s| !s.is_empty());
         self.m3u8_concurrency = self.m3u8_concurrency.clamp(1, 16);
         self.download_concurrency = self.download_concurrency.clamp(1, 16);
+        self.batch_parse_interval_ms = self.batch_parse_interval_ms.clamp(500, 10000);
         self.auto_open_after_download = self
             .auto_open_after_download
             .as_ref()

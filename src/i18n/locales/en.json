@@ -132,6 +132,7 @@
       "reveal": "Reveal in folder",
       "openFolder": "Open collection folder",
       "retry": "Retry",
+      "retryAll": "Retry all failed",
       "close": "Close",
       "selectAll": "Select All",
       "deselectAll": "Deselect All",
@@ -157,6 +158,7 @@
     "openFileFailed": "Failed to play file",
     "revealFileFailed": "Failed to open folder",
     "openDirFailed": "Failed to open directory",
+    "previewError": "Failed to load video preview",
     "dirNotFound": "Collection directory not found",
     "sources": {
       "douyin": "Douyin",

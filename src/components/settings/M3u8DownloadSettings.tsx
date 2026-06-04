@@ -16,11 +16,13 @@ interface M3u8DownloadSettingsProps {
   downloadSpeedLimit: number | undefined;
   autoOpenAfterDownload: "none" | "open" | "reveal" | undefined;
   autoClassifyDownloads: boolean | undefined;
+  batchParseIntervalMs: number | undefined;
   onChange: (updates: Partial<SettingsFormState>) => void;
 }
 
 const M3U8_OPTIONS = [1, 4, 8, 16];
 const DOWNLOAD_OPTIONS = [1, 2, 3, 4, 5];
+const BATCH_INTERVAL_OPTIONS = [500, 1000, 1500, 2000, 3000];
 
 const AUTO_OPEN_OPTIONS: {
   value: "none" | "open" | "reveal";
@@ -37,6 +39,7 @@ export function M3u8DownloadSettings({
   downloadSpeedLimit,
   autoOpenAfterDownload,
   autoClassifyDownloads,
+  batchParseIntervalMs,
   onChange,
 }: M3u8DownloadSettingsProps) {
   const { t } = useTranslation();
@@ -45,6 +48,7 @@ export function M3u8DownloadSettings({
   const speedLimitMb = Math.round((downloadSpeedLimit ?? 0) / 1024);
   const autoOpenValue = autoOpenAfterDownload ?? "none";
   const classifyValue = autoClassifyDownloads ?? false;
+  const batchIntervalValue = batchParseIntervalMs ?? 1500;
 
   const handleSpeedChange = (value: string) => {
     const num = parseInt(value, 10);
@@ -211,6 +215,39 @@ export function M3u8DownloadSettings({
             onChange({ autoClassifyDownloads: checked })
           }
         />
+      </div>
+
+      <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card/50 p-4 transition-colors hover:bg-muted/50">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-border">
+            <Layers className="h-4 w-4 text-primary" />
+          </div>
+          <div className="min-w-0 space-y-1">
+            <p className="truncate text-sm font-medium leading-none">
+              {t("settings.batchParseInterval", { defaultValue: "批量解析间隔" })}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {t("settings.batchParseIntervalHint", { defaultValue: "批量下载时两次解析之间的等待时间（毫秒）" })}
+            </p>
+          </div>
+        </div>
+        <div className="inline-flex shrink-0 rounded-lg border border-border bg-background p-1">
+          {BATCH_INTERVAL_OPTIONS.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onChange({ batchParseIntervalMs: option })}
+              className={[
+                "h-8 min-w-10 rounded-md px-3 text-sm transition-colors",
+                batchIntervalValue === option
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              ].join(" ")}
+            >
+              {option}ms
+            </button>
+          ))}
+        </div>
       </div>
     </section>
   );

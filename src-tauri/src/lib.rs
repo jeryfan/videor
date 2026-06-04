@@ -32,7 +32,7 @@ use tauri::Manager;
 use tauri::RunEvent;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-fn redact_url_for_log(url_str: &str) -> String {
+pub fn redact_url_for_log(url_str: &str) -> String {
     match url::Url::parse(url_str) {
         Ok(url) => {
             let mut output = format!("{}://", url.scheme());

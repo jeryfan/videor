@@ -16,11 +16,12 @@
 //! ```
 
 pub(crate) mod backup;
-mod dao;
+pub(crate) mod dao;
 mod migration;
 mod schema;
 
 // DAO 类型导出供外部使用
+pub use dao::download_history::DownloadHistoryState;
 
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
@@ -31,7 +32,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 0;
+pub(crate) const SCHEMA_VERSION: i32 = 1;
 
 /// 安全地获取 Mutex 锁，避免 unwrap panic
 macro_rules! lock_conn {

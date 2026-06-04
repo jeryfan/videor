@@ -284,6 +284,9 @@ fn remove_cookie_store() -> Result<(), String> {
     if path.exists() {
         std::fs::remove_file(&path).map_err(|e| format!("清除 Bilibili 登录信息失败: {e}"))?;
     }
+    if let Ok(entry) = keyring::Entry::new("com.videor", "bilibili_cookies") {
+        let _ = entry.delete_credential();
+    }
     Ok(())
 }
 
@@ -805,6 +808,26 @@ fn cookie_store_path() -> PathBuf {
 }
 
 pub fn load_cookie_header() -> Result<String, String> {
+    // 1. 尝试从系统 keyring 读取
+    match keyring::Entry::new("com.videor", "bilibili_cookies") {
+        Ok(entry) => match entry.get_password() {
+            Ok(password) => {
+                let store: BilibiliCookieStore = serde_json::from_str(&password)
+                    .map_err(|e| format!("解析 Bilibili Cookie 失败: {e}"))?;
+                return Ok(store
+                    .cookies
+                    .iter()
+                    .map(|c| format!("{}={}", c.name, c.value))
+                    .collect::<Vec<_>>()
+                    .join("; "));
+            }
+            Err(keyring::Error::NoEntry) => {}
+            Err(e) => log::warn!("读取 keyring 中的 Bilibili Cookie 失败: {e}"),
+        },
+        Err(e) => log::warn!("访问系统密钥环失败: {e}"),
+    }
+
+    // 2. 回退到明文文件（向后兼容）
     let path = cookie_store_path();
     if !path.exists() {
         return Ok(String::new());
@@ -812,6 +835,16 @@ pub fn load_cookie_header() -> Result<String, String> {
     let data = std::fs::read(&path).map_err(|e| format!("读取 Bilibili Cookie 失败: {e}"))?;
     let store: BilibiliCookieStore =
         serde_json::from_slice(&data).map_err(|e| format!("解析 Bilibili Cookie 失败: {e}"))?;
+
+    // 3. 尝试迁移到 keyring
+    if let Ok(entry) = keyring::Entry::new("com.videor", "bilibili_cookies") {
+        if let Ok(json) = serde_json::to_string(&store) {
+            if entry.set_password(&json).is_ok() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
     Ok(store
         .cookies
         .iter()
@@ -821,6 +854,25 @@ pub fn load_cookie_header() -> Result<String, String> {
 }
 
 fn load_cookie_value(name: &str) -> Result<Option<String>, String> {
+    // 1. 尝试从系统 keyring 读取
+    match keyring::Entry::new("com.videor", "bilibili_cookies") {
+        Ok(entry) => match entry.get_password() {
+            Ok(password) => {
+                let store: BilibiliCookieStore = serde_json::from_str(&password)
+                    .map_err(|e| format!("解析 Bilibili Cookie 失败: {e}"))?;
+                return Ok(store
+                    .cookies
+                    .iter()
+                    .find(|cookie| cookie.name == name)
+                    .map(|cookie| cookie.value.clone()));
+            }
+            Err(keyring::Error::NoEntry) => {}
+            Err(e) => log::warn!("读取 keyring 中的 Bilibili Cookie 失败: {e}"),
+        },
+        Err(e) => log::warn!("访问系统密钥环失败: {e}"),
+    }
+
+    // 2. 回退到明文文件（向后兼容）
     let path = cookie_store_path();
     if !path.exists() {
         return Ok(None);
@@ -856,8 +908,26 @@ fn save_cookies_from_headers(headers: &HeaderMap) -> Result<(), String> {
         return Err("Bilibili 登录成功但未返回 Cookie".to_string());
     }
     let store = BilibiliCookieStore { cookies };
-    let bytes = serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())?;
-    atomic_write(&cookie_store_path(), &bytes).map_err(|e| e.to_string())
+
+    // 优先写入系统 keyring
+    match keyring::Entry::new("com.videor", "bilibili_cookies") {
+        Ok(entry) => {
+            let json = serde_json::to_string(&store).map_err(|e| e.to_string())?;
+            entry.set_password(&json).map_err(|e| format!("保存 Cookie 到系统密钥环失败: {e}"))?;
+            // 成功后删除旧的明文文件
+            let path = cookie_store_path();
+            if path.exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        Err(e) => {
+            log::warn!("访问系统密钥环失败，回退到明文文件存储: {e}");
+            let bytes = serde_json::to_vec_pretty(&store).map_err(|e| e.to_string())?;
+            atomic_write(&cookie_store_path(), &bytes).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 fn extract_bvid(url: &str) -> Result<String, String> {

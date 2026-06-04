@@ -237,12 +237,6 @@ async fn run_task(
     save_path: &Path,
     cancel_token: &CancellationToken,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-
     if is_m3u8_url(&format.url) {
         let concurrency = crate::settings::get_settings()
             .m3u8_concurrency
@@ -257,7 +251,6 @@ async fn run_task(
         download_stream(
             app,
             task_id,
-            &client,
             format,
             &format.url,
             &video_tmp,
@@ -267,7 +260,6 @@ async fn run_task(
         download_stream(
             app,
             task_id,
-            &client,
             format,
             audio_url,
             &audio_tmp,
@@ -317,7 +309,6 @@ async fn run_task(
                 download_stream(
                     app,
                     task_id,
-                    &client,
                     format,
                     &format.url,
                     save_path,
@@ -331,7 +322,6 @@ async fn run_task(
         download_stream(
             app,
             task_id,
-            &client,
             format,
             &format.url,
             save_path,
@@ -387,11 +377,12 @@ async fn download_hls_concurrently(
     cancel_token: &CancellationToken,
     concurrency: usize,
 ) -> Result<(), String> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = super::create_http_client();
+//    let client = reqwest::Client::builder()
+//        .user_agent("...")
+//        .redirect(...)
+//        .build()
+//        .map_err(|e| e.to_string())?;
     let playlist = resolve_hls_media_playlist(&client, &format.url, &format.headers).await?;
     let parsed = parse_hls_segments(&playlist.url, &playlist.text)?;
     let segments = parsed.segments;
@@ -886,7 +877,6 @@ async fn remux_ts_to_mp4(input: &Path, output: &Path) -> Result<(), String> {
 async fn download_stream(
     app: &AppHandle,
     task_id: &str,
-    _client: &reqwest::Client,
     format: &VideoFormat,
     url: &str,
     save_path: &Path,
@@ -918,11 +908,7 @@ async fn download_stream(
         }
     }
 
-    let dl_client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let dl_client = super::create_http_client();
 
     let mut req = dl_client.get(&final_url);
     if !format.headers.is_empty() {

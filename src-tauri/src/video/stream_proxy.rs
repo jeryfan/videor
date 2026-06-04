@@ -3,14 +3,24 @@ use reqwest::header::{
     CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, COOKIE, RANGE, REFERER, USER_AGENT,
 };
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tauri::http::{header, Request, Response, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::OnceCell;
 
 const STREAM_CHUNK_SIZE: u64 = 1024 * 1024;
+const HLS_CONTEXT_TTL_SECS: u64 = 30 * 60;
+
 static LOCAL_PROXY_PORT: OnceCell<u16> = OnceCell::const_new();
-static HLS_PROXY_CONTEXTS: OnceCell<tokio::sync::RwLock<HashMap<String, HashMap<String, String>>>> =
+
+#[derive(Clone)]
+struct HlsContextEntry {
+    headers: HashMap<String, String>,
+    created_at: Instant,
+}
+
+static HLS_PROXY_CONTEXTS: OnceCell<tokio::sync::RwLock<HashMap<String, HlsContextEntry>>> =
     OnceCell::const_new();
 
 pub async fn proxy_url_for(upstream_url: &str) -> Result<String, String> {
@@ -31,7 +41,13 @@ pub async fn proxy_hls_url_for(
         .await
         .write()
         .await
-        .insert(token.clone(), headers.clone());
+        .insert(
+            token.clone(),
+            HlsContextEntry {
+                headers: headers.clone(),
+                created_at: Instant::now(),
+            },
+        );
     Ok(format!(
         "http://127.0.0.1:{port}/hls?token={}&url={}",
         percent_encode(&token),
@@ -142,6 +158,26 @@ async fn ensure_local_http_proxy() -> Result<u16, String> {
                 }
             });
 
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(300));
+                loop {
+                    interval.tick().await;
+                    let mut contexts = hls_contexts().await.write().await;
+                    let now = Instant::now();
+                    let expired: Vec<String> = contexts
+                        .iter()
+                        .filter(|(_, entry)| {
+                            now.duration_since(entry.created_at)
+                                > Duration::from_secs(HLS_CONTEXT_TTL_SECS)
+                        })
+                        .map(|(token, _)| token.clone())
+                        .collect();
+                    for token in expired {
+                        contexts.remove(&token);
+                    }
+                }
+            });
+
             Ok(port)
         })
         .await
@@ -198,13 +234,14 @@ async fn fetch_hls_resource(
         return Ok(text_response(StatusCode::FORBIDDEN, "unsupported hls url"));
     }
 
-    let headers = hls_contexts()
+    let entry = hls_contexts()
         .await
         .read()
         .await
         .get(token)
         .cloned()
         .ok_or_else(|| "hls context expired".to_string())?;
+    let headers = entry.headers;
 
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -290,7 +327,7 @@ fn rewrite_hls_playlist(token: &str, base_url: &str, playlist: &str) -> Result<S
     Ok(output)
 }
 
-async fn hls_contexts() -> &'static tokio::sync::RwLock<HashMap<String, HashMap<String, String>>> {
+async fn hls_contexts() -> &'static tokio::sync::RwLock<HashMap<String, HlsContextEntry>> {
     HLS_PROXY_CONTEXTS
         .get_or_init(|| async { tokio::sync::RwLock::new(HashMap::new()) })
         .await

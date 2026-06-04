@@ -165,6 +165,21 @@ pub fn get_current_proxy_url() -> Option<String> {
         .and_then(|url| url.clone())
 }
 
+/// 获取全局 HTTP 客户端
+///
+/// 如果全局客户端未初始化，返回一个默认配置的直连客户端。
+pub fn get_client() -> Client {
+    GLOBAL_CLIENT
+        .get()
+        .and_then(|lock| lock.read().ok().map(|guard| guard.clone()))
+        .unwrap_or_else(|| {
+            Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("failed to build fallback http client")
+        })
+}
+
 /// 检查是否正在使用代理
 #[allow(dead_code)]
 pub fn is_proxy_enabled() -> bool {

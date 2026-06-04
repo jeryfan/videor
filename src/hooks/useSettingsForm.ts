@@ -163,6 +163,7 @@ export function useSettingsForm(): UseSettingsFormResult {
         downloadSpeedLimit: serverData.downloadSpeedLimit ?? 0,
         autoOpenAfterDownload: serverData.autoOpenAfterDownload ?? "none",
         autoClassifyDownloads: serverData.autoClassifyDownloads ?? false,
+        batchParseIntervalMs: serverData.batchParseIntervalMs ?? 1500,
       };
 
       setSettingsState(normalized);

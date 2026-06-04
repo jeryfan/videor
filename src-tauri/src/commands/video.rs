@@ -9,7 +9,7 @@ use tauri::Manager;
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
-const DOWNLOAD_HISTORY_KEY: &str = "download_history_state";
+use crate::database::DownloadHistoryState;
 
 #[derive(Debug, serde::Serialize)]
 pub struct FfmpegStatus {
@@ -193,24 +193,21 @@ pub async fn cancel_video_download(app: AppHandle, task_id: String) -> Result<()
 #[tauri::command]
 pub async fn get_download_history(
     state: State<'_, AppState>,
-) -> Result<Option<serde_json::Value>, String> {
+) -> Result<DownloadHistoryState, String> {
     state
         .db
-        .get_setting(DOWNLOAD_HISTORY_KEY)
-        .map_err(|e| e.to_string())?
-        .map(|value| serde_json::from_str(&value).map_err(|e| e.to_string()))
-        .transpose()
+        .get_download_history()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn save_download_history(
     state: State<'_, AppState>,
-    history: serde_json::Value,
+    history: DownloadHistoryState,
 ) -> Result<(), String> {
-    let value = serde_json::to_string(&history).map_err(|e| e.to_string())?;
     state
         .db
-        .set_setting(DOWNLOAD_HISTORY_KEY, &value)
+        .save_download_history(&history)
         .map_err(|e| e.to_string())
 }
 
@@ -218,7 +215,7 @@ pub async fn save_download_history(
 pub async fn clear_download_history(state: State<'_, AppState>) -> Result<(), String> {
     state
         .db
-        .set_setting(DOWNLOAD_HISTORY_KEY, "{}")
+        .clear_download_history()
         .map_err(|e| e.to_string())
 }
 

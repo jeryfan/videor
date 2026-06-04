@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { VideoFormat } from "./videoParser";
+import type {
+  DownloadHistoryTask,
+} from "@/types/download";
 
 export interface DownloadProgress {
   task_id: string;
@@ -20,23 +23,9 @@ export type DownloadStatus =
   | "failed"
   | "cancelled";
 
-export interface DownloadTask {
-  taskId: string;
-  title: string;
-  status: DownloadStatus;
-  progress: number;
-  speed: number;
-  total: number | null;
-  error?: string;
-}
-
 export interface DownloadHistoryState {
-  tasks?: unknown[];
-  singleDownloadTask?: unknown;
-  batchDownloadTitle?: string;
-  batchDownloadItems?: unknown[];
-  isBatchHistoryExpanded?: boolean;
-  updatedAt?: number;
+  tasks: DownloadHistoryTask[];
+  updated_at: number;
 }
 
 /**
@@ -68,8 +57,8 @@ export async function cancelVideoDownload(taskId: string): Promise<void> {
   return await invoke("cancel_video_download", { taskId });
 }
 
-export async function getDownloadHistory(): Promise<DownloadHistoryState | null> {
-  return await invoke<DownloadHistoryState | null>("get_download_history");
+export async function getDownloadHistory(): Promise<DownloadHistoryState> {
+  return await invoke<DownloadHistoryState>("get_download_history");
 }
 
 export async function saveDownloadHistory(

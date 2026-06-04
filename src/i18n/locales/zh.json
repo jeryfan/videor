@@ -132,6 +132,7 @@
       "reveal": "在文件夹中显示",
       "openFolder": "打开合集目录",
       "retry": "重试",
+      "retryAll": "重试所有失败项",
       "close": "关闭",
       "selectAll": "全选",
       "deselectAll": "取消全选",
@@ -157,6 +158,7 @@
     "openFileFailed": "播放文件失败",
     "revealFileFailed": "打开文件夹失败",
     "openDirFailed": "打开目录失败",
+    "previewError": "视频预览加载失败",
     "dirNotFound": "未找到合集目录",
     "sources": {
       "douyin": "抖音",
