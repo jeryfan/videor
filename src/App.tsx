@@ -10,10 +10,6 @@ import {
   Minimize2,
   X,
   Search,
-  Music2,
-  Tv,
-  Radio,
-  Link2,
   Download,
   Loader2,
   UserRound,
@@ -56,6 +52,12 @@ import {
 } from "@/lib/curlImport";
 import { CurlImportDialog } from "@/components/CurlImportDialog";
 import { UpdateBanner } from "@/components/UpdateBanner";
+import { CircularProgress } from "@/components/download/CircularProgress";
+import {
+  SourceSwitcher,
+  VIDEO_SOURCES,
+  getInitialVideoSource,
+} from "@/components/SourceSwitcher";
 import {
   parseVideo,
   generateBilibiliLoginQr,
@@ -96,120 +98,9 @@ import { downloadStatusBadgeClass } from "@/utils/downloadUtils";
 
 const DEFAULT_DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
 const HEADER_HEIGHT = 64; // px
-const VIDEO_SOURCE_STORAGE_KEY = "videor-active-source";
-
-const VIDEO_SOURCES: Array<{
-  id: VideoSource;
-  label: string;
-  icon: typeof Music2;
-}> = [
-  { id: "douyin", label: "抖音", icon: Music2 },
-  { id: "bilibili", label: "Bilibili", icon: Tv },
-  { id: "m3u8", label: "M3U8", icon: Radio },
-  { id: "other", label: "其他", icon: Link2 },
-];
-
-const getInitialVideoSource = (): VideoSource => {
-  const saved = localStorage.getItem(
-    VIDEO_SOURCE_STORAGE_KEY,
-  ) as VideoSource | null;
-  if (saved && VIDEO_SOURCES.some((source) => source.id === saved)) {
-    return saved;
-  }
-  return "douyin";
-};
-
-function CircularProgress({
-  progress,
-  size = 32,
-  status,
-}: {
-  progress: number;
-  size?: number;
-  status?: BatchDownloadStatus;
-}) {
-  const stroke = 3;
-  const r = (size - stroke) / 2;
-  const c = 2 * Math.PI * r;
-  const offset = c - (progress / 100) * c;
-  const colorClass = status === "failed" ? "text-destructive" : "text-primary";
-  return (
-    <svg width={size} height={size} className="shrink-0 -rotate-90">
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={r}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={stroke}
-        className="text-muted/30"
-      />
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={r}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={stroke}
-        strokeLinecap="round"
-        strokeDasharray={c}
-        strokeDashoffset={offset}
-        className={cn("transition-all duration-500", colorClass)}
-      />
-    </svg>
-  );
-}
-
-function SourceSwitcher({
-  activeSource,
-  onSwitch,
-}: {
-  activeSource: VideoSource;
-  onSwitch: (source: VideoSource) => void;
-}) {
-  const handleSwitch = (source: VideoSource) => {
-    if (source === activeSource) return;
-    localStorage.setItem(VIDEO_SOURCE_STORAGE_KEY, source);
-    onSwitch(source);
-  };
-
-  return (
-    <div className="inline-flex max-w-full items-center gap-1 rounded-xl bg-muted p-1">
-      {VIDEO_SOURCES.map(({ id, label, icon: Icon }) => {
-        const isActive = id === activeSource;
-        return (
-          <button
-            key={id}
-            type="button"
-            onClick={() => handleSwitch(id)}
-            title={label}
-            className={cn(
-              "group inline-flex h-8 items-center rounded-md px-3 text-sm font-medium transition-all duration-200",
-              isActive
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-background/50 hover:text-foreground",
-            )}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            <span className="ml-2 whitespace-nowrap transition-all duration-200 max-[760px]:ml-0 max-[760px]:max-w-0 max-[760px]:overflow-hidden max-[760px]:opacity-0">
-              {label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 function App() {
   const { t } = useTranslation();
-
-  const batchStatusLabel = useCallback(
-    (status: BatchDownloadStatus) => {
-      return t(`download.status.${status}`);
-    },
-    [t],
-  );
 
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -472,14 +363,14 @@ function App() {
 
   const handleOpenBilibiliLogin = useCallback(async () => {
     try {
-      setBilibiliLoginMessage("正在生成二维码...");
+      setBilibiliLoginMessage(t("video.bilibili.generatingQr"));
       setBilibiliQrImage("");
       setBilibiliQrKey("");
       setIsBilibiliLoginOpen(true);
       const qr = await generateBilibiliLoginQr();
       setBilibiliQrKey(qr.qrcode_key);
       setBilibiliQrImage(qr.svg);
-      setBilibiliLoginMessage("请使用 Bilibili App 扫码登录");
+      setBilibiliLoginMessage(t("video.bilibili.scanHint"));
     } catch (error) {
       setBilibiliLoginMessage(extractErrorMessage(error));
     }
@@ -766,7 +657,7 @@ function App() {
             taskId === progress.task_id ? null : taskId,
           );
         } else if (progress.status === "failed") {
-          setDownloadError("下载失败");
+          setDownloadError(t("video.downloadFailed"));
           if (progress.is_batch !== true) {
             toast.error(t("video.downloadFailed"));
           }
@@ -826,7 +717,7 @@ function App() {
           activeDownloadResourceKeysRef.current.has(key),
         )
       ) {
-        toast.info("该视频正在下载中");
+        toast.info(t("video.alreadyDownloading"));
         return;
       }
       resourceKeys.forEach((key) =>
@@ -1541,8 +1432,8 @@ function App() {
                   )}
                   <span className="hidden text-xs lg:inline">
                     {bilibiliStatus?.logged_in
-                      ? bilibiliStatus.username || "已登录"
-                      : "登录"}
+                      ? bilibiliStatus.username || t("video.bilibili.loggedIn")
+                      : t("video.bilibili.login")}
                   </span>
                 </Button>
               </div>
@@ -1731,7 +1622,7 @@ function App() {
                           )
                         }
                         className="flex h-7 w-7 items-center justify-center rounded-md hover:bg-muted transition-colors"
-                        aria-label={task.expanded ? "收起" : "展开"}
+                        aria-label={task.expanded ? t("download.action.collapse") : t("download.action.expand")}
                       >
                         {task.expanded ? (
                           <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -1746,7 +1637,7 @@ function App() {
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       {task.type === "batch"
                         ? `批量任务 · 共 ${items.length} 个 · 完成 ${completedCount} 个`
-                        : "单视频"}
+                        : t("download.singleTask")}
                       {task.type === "batch" && failedCount > 0
                         ? ` · 失败 ${failedCount} 个`
                         : ""}
@@ -1755,7 +1646,7 @@ function App() {
                         : ""}
                       {" · "}
                       {VIDEO_SOURCES.find((source) => source.id === task.source)
-                        ?.label || "其他"}
+                        ?.label || t("download.unknownSource")}
                     </p>
                     {task.error && (
                       <p className="mt-0.5 truncate text-xs text-destructive">
@@ -1770,7 +1661,7 @@ function App() {
                         downloadStatusBadgeClass(task.status),
                       )}
                     >
-                      {batchStatusLabel(task.status)}
+                      {t(`download.status.${task.status}`)}
                     </span>
                     <span className="hidden sm:block w-16 text-right text-xs tabular-nums text-muted-foreground">
                       {formatDownloadSpeed(
@@ -1884,7 +1775,7 @@ function App() {
                               downloadStatusBadgeClass(item.status),
                             )}
                           >
-                            {batchStatusLabel(item.status)}
+                            {t(`download.status.${item.status}`)}
                           </span>
                           {item.status !== "completed" ? (
                             <CircularProgress

@@ -25,7 +25,7 @@ pub struct FfmpegStatus {
 pub async fn parse_video(input: String) -> Result<VideoInfo, String> {
     log::info!(
         "[VideoCommand] Parsing: {}",
-        input.chars().take(100).collect::<String>()
+        crate::redact_url_for_log(&input)
     );
     parse_video_url(&input).await
 }
@@ -34,7 +34,7 @@ pub async fn parse_video(input: String) -> Result<VideoInfo, String> {
 pub async fn parse_video_with_curl(input: String, raw_curl: String) -> Result<VideoInfo, String> {
     log::info!(
         "[VideoCommand] Parsing with cURL: {}",
-        input.chars().take(100).collect::<String>()
+        crate::redact_url_for_log(&input)
     );
     parse_video_url_with_curl(&input, &raw_curl).await
 }
@@ -43,7 +43,7 @@ pub async fn parse_video_with_curl(input: String, raw_curl: String) -> Result<Vi
 pub async fn parse_m3u8(input: String, raw_curl: Option<String>) -> Result<VideoInfo, String> {
     log::info!(
         "[VideoCommand] Parsing M3U8: {}",
-        input.chars().take(100).collect::<String>()
+        crate::redact_url_for_log(&input)
     );
     let client = crate::video::create_http_client();
     let headers = raw_curl
@@ -158,11 +158,12 @@ pub async fn start_video_download(
     let save_path = PathBuf::from(save_dir);
 
     log::info!(
-        "[VideoCommand] Starting download: task_id={}, title={}, save_dir={:?}, is_batch={}",
+        "[VideoCommand] Starting download: task_id={}, title={}, save_dir={:?}, is_batch={}, url={}",
         task_id,
         title,
         save_path,
-        is_batch
+        is_batch,
+        crate::redact_url_for_log(&format.url)
     );
 
     let app_clone = app.clone();
