@@ -9,6 +9,7 @@ import {
   cancelVideoDownload,
   clearDownloadHistory,
   deleteDownloadTask,
+  removeDownloadPartFile,
   openDownloadFile,
   revealDownloadFile,
   openDirectory,
@@ -145,6 +146,7 @@ export function useDownloadActions(
             progress: 0,
             speed: 0,
             filePath: undefined,
+            directoryPath: finalDir,
             createdAt: now,
             updatedAt: now,
           },
@@ -543,6 +545,37 @@ export function useDownloadActions(
 
   const handleDeleteDownloadTask = useCallback(
     async (taskId: string) => {
+      const taskToDelete = downloadHistoryTasks.find((t) => t.id === taskId);
+
+      // 清理未完成的 .part 临时文件
+      if (taskToDelete) {
+        const shouldCleanPart = ["downloading", "failed", "cancelled"].includes(
+          taskToDelete.status,
+        );
+        if (shouldCleanPart) {
+          if (taskToDelete.type === "single" && taskToDelete.directoryPath) {
+            removeDownloadPartFile(taskToDelete.directoryPath, taskToDelete.title).catch(
+              () => {
+                /* 忽略清理失败 */
+              },
+            );
+          } else if (taskToDelete.type === "batch" && taskToDelete.directoryPath) {
+            (taskToDelete.items || [])
+              .filter((item) =>
+                ["downloading", "failed", "cancelled"].includes(item.status),
+              )
+              .forEach((item) => {
+                removeDownloadPartFile(
+                  taskToDelete.directoryPath!,
+                  formatBatchItemTitle(item.order, item.title),
+                ).catch(() => {
+                  /* 忽略清理失败 */
+                });
+              });
+          }
+        }
+      }
+
       setDownloadHistoryTasks((tasks) =>
         tasks.filter((task) => task.id !== taskId),
       );
@@ -565,7 +598,7 @@ export function useDownloadActions(
         );
       }
     },
-    [setDownloadHistoryTasks, setDownloadTaskId],
+    [downloadHistoryTasks, setDownloadHistoryTasks, setDownloadTaskId],
   );
 
   const handleCancelVideoDownload = useCallback(

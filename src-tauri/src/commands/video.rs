@@ -272,3 +272,19 @@ pub async fn open_directory(app: AppHandle, dir_path: String) -> Result<(), Stri
         .open_path(path, None::<String>)
         .map_err(|e| format!("打开目录失败: {e}"))
 }
+
+/// 删除下载任务的 .part 临时文件（用于清理未完成的下载碎片）
+#[tauri::command]
+pub async fn remove_download_part_file(
+    dir: String,
+    title: String,
+) -> Result<(), String> {
+    let sanitized = crate::video::downloader::sanitize_filename(&title);
+    let part = PathBuf::from(&dir).join(format!("{}.mp4.part", sanitized));
+    if part.exists() {
+        tokio::fs::remove_file(&part)
+            .await
+            .map_err(|e| format!("删除临时文件失败: {e}"))?;
+    }
+    Ok(())
+}

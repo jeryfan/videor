@@ -1153,7 +1153,7 @@ async fn resolve_cdn_url(url: &str, referer: Option<&str>) -> Result<String, Str
     Ok(url.to_string())
 }
 
-fn sanitize_filename(name: &str) -> String {
+pub(crate) fn sanitize_filename(name: &str) -> String {
     let mut result: String = name
         .chars()
         .map(|c| match c {

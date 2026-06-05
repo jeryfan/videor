@@ -32,6 +32,7 @@ export interface SingleDownloadTask {
   speed: number;
   error?: string;
   filePath?: string;
+  directoryPath?: string;
 }
 
 export interface DownloadHistoryTask {
@@ -225,6 +226,8 @@ export function restoreSingleDownloadTask(
           ? task.error
           : undefined,
     filePath: typeof task.filePath === "string" ? task.filePath : undefined,
+    directoryPath:
+      typeof task.directoryPath === "string" ? task.directoryPath : undefined,
   };
 }
 
@@ -339,6 +342,10 @@ export function restoreDownloadHistoryTasks(
           type: "single" as const,
           resourceKey:
             typeof typedTask.resourceKey === "string" ? typedTask.resourceKey : undefined,
+          directoryPath:
+            typeof typedTask.directoryPath === "string"
+              ? typedTask.directoryPath
+              : undefined,
           createdAt:
             typeof typedTask.createdAt === "number" ? typedTask.createdAt : now - index,
           updatedAt:
@@ -358,6 +365,7 @@ export function restoreDownloadHistoryTasks(
       ...single,
       type: "single",
       resourceKey: undefined,
+      directoryPath: undefined,
       createdAt: now - 1,
       updatedAt: now - 1,
     });

@@ -523,6 +523,7 @@ pub fn run() {
             commands::open_download_file,
             commands::reveal_download_file,
             commands::open_directory,
+            commands::remove_download_part_file,
         ]);
 
     let app = builder

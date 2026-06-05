@@ -76,6 +76,13 @@ export async function deleteDownloadTask(taskId: string): Promise<void> {
   return await invoke("delete_download_task", { taskId });
 }
 
+export async function removeDownloadPartFile(
+  dir: string,
+  title: string,
+): Promise<void> {
+  return await invoke("remove_download_part_file", { dir, title });
+}
+
 export async function openDownloadFile(filePath: string): Promise<void> {
   return await invoke("open_download_file", { filePath });
 }
