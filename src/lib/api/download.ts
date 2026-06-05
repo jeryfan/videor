@@ -13,6 +13,7 @@ export interface DownloadProgress {
   status: DownloadStatus;
   file_path?: string | null;
   is_batch?: boolean;
+  error?: string | null;
 }
 
 export type DownloadStatus =
@@ -69,6 +70,10 @@ export async function saveDownloadHistory(
 
 export async function clearDownloadHistory(): Promise<void> {
   return await invoke("clear_download_history");
+}
+
+export async function deleteDownloadTask(taskId: string): Promise<void> {
+  return await invoke("delete_download_task", { taskId });
 }
 
 export async function openDownloadFile(filePath: string): Promise<void> {

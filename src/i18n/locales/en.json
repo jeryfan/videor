@@ -83,7 +83,19 @@
       "testSuccess": "Test successful, latency {{latency}}ms"
     },
     "autoLaunchFailed": "Failed to set auto launch",
-    "saveFailedGeneric": "Save failed, please try again"
+    "saveFailedGeneric": "Save failed, please try again",
+    "batchParseInterval": "Batch parse interval",
+    "batchParseIntervalHint": "Wait time between parses during batch download (ms)",
+    "changeDirectory": "Change",
+    "downloadDirChanged": "Download directory updated",
+    "downloadDirPickFailed": "Failed to select directory",
+    "downloadDirReset": "Reset to system default download directory",
+    "downloadDirectory": "Download Directory",
+    "downloadDirectoryDefault": "System default download directory",
+    "downloadDirectoryDescription": "Default save location for video downloads",
+    "portableUpdateHint": "Portable mode: updates require manual download.",
+    "updateTo": "Update to {{version}}",
+    "updateAvailable": "New version {{version}} available"
   },
   "notifications": {
     "windowControlFailed": "Window control failed: {{error}}",
@@ -114,15 +126,19 @@
     "batchCancelled": "{{count}} cancelled",
     "unknownSource": "Other",
     "sessionInterrupted": "Application exited, task stopped",
+    "selectVideos": "Please select at least one video",
+    "allDownloading": "All selected videos are already downloading",
     "clearBlocked": "Cannot clear history while downloads are in progress",
     "clearFailed": "Failed to clear download history",
+    "deleteFailed": "Failed to delete task",
     "status": {
       "queued": "Queued",
       "downloading": "Downloading",
       "remuxing": "Remuxing",
       "completed": "Completed",
       "failed": "Failed",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "active": "Active"
     },
     "action": {
       "collapse": "Collapse",
@@ -133,11 +149,13 @@
       "openFolder": "Open collection folder",
       "retry": "Retry",
       "retryAll": "Retry all failed",
+      "delete": "Delete record",
       "close": "Close",
       "selectAll": "Select All",
       "deselectAll": "Deselect All",
       "startBatch": "Batch Download"
-    }
+    },
+    "downloadVideo": "Download Video"
   },
   "video": {
     "parsing": "Parsing video...",
@@ -145,6 +163,7 @@
     "parsingFailed": "Parsing failed, please check the link",
     "infoIncomplete": "Video info incomplete, cannot download",
     "alreadyDownloading": "This video is already downloading",
+    "alreadyInHistory": "This video is already in history",
     "noSaveDir": "No save directory selected",
     "downloadComplete": "Download completed",
     "downloadFailed": "Download failed",
@@ -214,6 +233,11 @@
     "restartApp": "Restart App",
     "restartLater": "Restart Later",
     "retry": "Retry",
-    "downloadFailed": "Update download failed, please try again later"
+    "downloadFailed": "Update download failed, please try again later",
+    "close": "Close"
+  },
+  "curlImport": {
+    "title": "cURL Import",
+    "usingHeaders": "Using {{count}} headers from {{domain}}"
   }
 }

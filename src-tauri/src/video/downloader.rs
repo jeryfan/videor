@@ -24,6 +24,8 @@ pub struct DownloadProgress {
     pub file_path: Option<String>,
     #[serde(default)]
     pub is_batch: Option<bool>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// 下载状态
@@ -34,8 +36,16 @@ pub enum DownloadStatus {
     Downloading,
     Remuxing,
     Completed,
+    #[serde(serialize_with = "serialize_failed")]
     Failed(String),
     Cancelled,
+}
+
+fn serialize_failed<S>(_error: &String, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str("failed")
 }
 
 #[derive(Clone)]
@@ -119,6 +129,7 @@ impl DownloadManager {
                     status: DownloadStatus::Queued,
                     file_path: None,
                     is_batch: Some(is_batch),
+                    error: None,
                 },
             );
             let mut queue = self.queue.write().await;
@@ -190,6 +201,11 @@ impl DownloadManager {
                 .then(|| spec.save_path.to_str().map(str::to_string))
                 .flatten();
 
+            let error = match &status {
+                DownloadStatus::Failed(e) => Some(e.clone()),
+                _ => None,
+            };
+
             let _ = spec.app.emit(
                 "video-download-progress",
                 DownloadProgress {
@@ -200,6 +216,7 @@ impl DownloadManager {
                     status,
                     file_path,
                     is_batch: Some(spec.is_batch),
+                    error,
                 },
             );
 
@@ -278,6 +295,7 @@ async fn run_task(
                 status: DownloadStatus::Remuxing,
                 file_path: None,
                 is_batch: None,
+                error: None,
             },
         );
 
@@ -497,6 +515,7 @@ async fn download_hls_concurrently(
                             status: DownloadStatus::Downloading,
                             file_path: None,
                             is_batch: None,
+                            error: None,
                         },
                     );
                     *report_at = now;
@@ -543,6 +562,7 @@ async fn download_hls_concurrently(
             status: DownloadStatus::Remuxing,
             file_path: None,
             is_batch: None,
+            error: None,
         },
     );
 
@@ -917,19 +937,60 @@ async fn download_stream(
     if let Some(r) = referer {
         req = req.header("Referer", r);
     }
+    // Bilibili CDN 需要 User-Agent，未登录时 format.headers 可能为空
+    let has_ua = format.headers.keys().any(|k| k.eq_ignore_ascii_case("user-agent"));
+    if is_bilibili && !has_ua {
+        req = req.header("User-Agent", super::bilibili::BILI_UA);
+    }
     if start_byte > 0 {
         req = req.header("Range", format!("bytes={}-", start_byte));
     }
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let mut resp = req.send().await.map_err(|e| e.to_string())?;
 
-    // 检查服务器是否支持 Range
-    let supports_range = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-    if !supports_range && start_byte > 0 {
-        let _ = tokio::fs::remove_file(&part_path).await;
-        start_byte = 0;
+    // 处理 Range 请求的响应
+    let needs_retry_without_range = if start_byte > 0 {
+        if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+            false
+        } else if resp.status() == reqwest::StatusCode::OK {
+            // 服务器忽略 Range，发送完整内容
+            let _ = tokio::fs::remove_file(&part_path).await;
+            start_byte = 0;
+            false
+        } else if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            // Range 不可满足（通常是 .part 文件已完整），删除后重试
+            let _ = tokio::fs::remove_file(&part_path).await;
+            start_byte = 0;
+            true
+        } else if !resp.status().is_success() {
+            return Err(format!("下载请求失败: HTTP {}", resp.status()));
+        } else {
+            false
+        }
+    } else {
+        if !resp.status().is_success() {
+            return Err(format!("下载请求失败: HTTP {}", resp.status()));
+        }
+        false
+    };
+
+    if needs_retry_without_range {
+        let mut req = dl_client.get(&final_url);
+        if !format.headers.is_empty() {
+            req = req.headers(hash_map_to_header_map(&format.headers));
+        }
+        if let Some(r) = referer {
+            req = req.header("Referer", r);
+        }
+        if is_bilibili && !has_ua {
+            req = req.header("User-Agent", super::bilibili::BILI_UA);
+        }
+        resp = req.send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            return Err(format!("下载请求失败: HTTP {}", resp.status()));
+        }
     }
 
-    let total = if supports_range {
+    let total = if resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
         // 从 Content-Range 解析总大小
         resp.headers()
             .get("content-range")
@@ -941,6 +1002,21 @@ async fn download_stream(
     };
 
     let mut stream = resp.bytes_stream();
+
+    // 立即通知前端下载已开始，避免状态长时间无更新
+    let _ = app.emit(
+        "video-download-progress",
+        DownloadProgress {
+            task_id: task_id.to_string(),
+            downloaded: start_byte,
+            total,
+            speed: 0,
+            status: DownloadStatus::Downloading,
+            file_path: None,
+            is_batch: None,
+            error: None,
+        },
+    );
 
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
@@ -971,13 +1047,14 @@ async fn download_stream(
                         status: DownloadStatus::Cancelled,
                         file_path: None,
                         is_batch: None,
+                        error: None,
                     },
                 );
                 return Err("下载已取消".to_string());
             }
-            chunk = stream.next() => {
+            chunk = tokio::time::timeout(Duration::from_secs(120), stream.next()) => {
                 match chunk {
-                    Some(Ok(bytes)) => {
+                    Ok(Some(Ok(bytes))) => {
                         file.write_all(&bytes)
                             .await
                             .map_err(|e| format!("写入文件失败: {}", e))?;
@@ -1013,6 +1090,7 @@ async fn download_stream(
                                     status: DownloadStatus::Downloading,
                                     file_path: None,
                                     is_batch: None,
+                                    error: None,
                                 },
                             );
 
@@ -1020,15 +1098,19 @@ async fn download_stream(
                             last_downloaded = downloaded;
                         }
                     }
-                    Some(Err(e)) => {
+                    Ok(Some(Err(e))) => {
                         drop(file);
                         return Err(format!("下载出错: {}", e));
                     }
-                    None => {
+                    Ok(None) => {
                         file.flush()
                             .await
                             .map_err(|e| format!("刷新文件失败: {}", e))?;
                         break;
+                    }
+                    Err(_) => {
+                        drop(file);
+                        return Err("下载超时：120秒内未收到数据，连接可能已断开".to_string());
                     }
                 }
             }

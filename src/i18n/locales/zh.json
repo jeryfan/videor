@@ -83,7 +83,19 @@
       "testSuccess": "测试成功，延迟 {{latency}}ms"
     },
     "autoLaunchFailed": "设置开机自启失败",
-    "saveFailedGeneric": "保存失败，请重试"
+    "saveFailedGeneric": "保存失败，请重试",
+    "batchParseInterval": "批量解析间隔",
+    "batchParseIntervalHint": "批量下载时两次解析之间的等待时间（毫秒）",
+    "changeDirectory": "更改",
+    "downloadDirChanged": "下载目录已更新",
+    "downloadDirPickFailed": "选择目录失败",
+    "downloadDirReset": "已恢复为系统默认下载目录",
+    "downloadDirectory": "下载目录",
+    "downloadDirectoryDefault": "系统默认下载目录",
+    "downloadDirectoryDescription": "视频下载的默认保存位置",
+    "portableUpdateHint": "当前为便携版，更新需手动下载。",
+    "updateTo": "更新到 {{version}}",
+    "updateAvailable": "发现新版本 {{version}}"
   },
   "notifications": {
     "windowControlFailed": "窗口控制失败：{{error}}",
@@ -114,15 +126,19 @@
     "batchCancelled": "取消 {{count}} 个",
     "unknownSource": "其他",
     "sessionInterrupted": "应用已退出，任务已停止",
+    "selectVideos": "请至少选择一个视频",
+    "allDownloading": "所选视频均已在下载中",
     "clearBlocked": "仍有下载任务进行中，无法清空历史",
     "clearFailed": "清空下载历史失败",
+    "deleteFailed": "删除任务失败",
     "status": {
       "queued": "等待",
       "downloading": "下载中",
       "remuxing": "合并中",
       "completed": "完成",
       "failed": "失败",
-      "cancelled": "已取消"
+      "cancelled": "已取消",
+      "active": "进行中"
     },
     "action": {
       "collapse": "收起",
@@ -133,11 +149,13 @@
       "openFolder": "打开合集目录",
       "retry": "重试",
       "retryAll": "重试所有失败项",
+      "delete": "删除记录",
       "close": "关闭",
       "selectAll": "全选",
       "deselectAll": "取消全选",
       "startBatch": "批量下载"
-    }
+    },
+    "downloadVideo": "下载视频"
   },
   "video": {
     "parsing": "正在解析视频...",
@@ -145,6 +163,7 @@
     "parsingFailed": "解析失败，请检查链接是否正确",
     "infoIncomplete": "视频信息不完整，无法下载",
     "alreadyDownloading": "该视频正在下载中",
+    "alreadyInHistory": "该视频已在历史记录中",
     "noSaveDir": "未选择保存目录",
     "downloadComplete": "下载完成",
     "downloadFailed": "下载失败",
@@ -214,6 +233,11 @@
     "restartApp": "重启应用",
     "restartLater": "稍后重启",
     "retry": "重试",
-    "downloadFailed": "更新下载失败，请稍后重试"
+    "downloadFailed": "更新下载失败，请稍后重试",
+    "close": "关闭"
+  },
+  "curlImport": {
+    "title": "cURL 导入",
+    "usingHeaders": "已应用 {{domain}} 的 {{count}} 个请求头"
   }
 }

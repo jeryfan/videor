@@ -189,8 +189,8 @@ pub fn is_proxy_enabled() -> bool {
 /// 构建 HTTP 客户端
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
     let mut builder = Client::builder()
-        .timeout(Duration::from_secs(600))
-        .connect_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15))
         .pool_max_idle_per_host(10)
         .tcp_keepalive(Duration::from_secs(60))
         // 禁用 reqwest 自动解压：防止 reqwest 覆盖客户端原始 accept-encoding header。

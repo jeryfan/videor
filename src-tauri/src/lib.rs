@@ -519,6 +519,7 @@ pub fn run() {
             commands::get_download_history,
             commands::save_download_history,
             commands::clear_download_history,
+            commands::delete_download_task,
             commands::open_download_file,
             commands::reveal_download_file,
             commands::open_directory,

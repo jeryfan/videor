@@ -221,6 +221,18 @@ pub async fn clear_download_history(state: State<'_, AppState>) -> Result<(), St
 }
 
 #[tauri::command]
+pub async fn delete_download_task(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<(), String> {
+    log::info!("[VideoCommand] Deleting download task: task_id={}", task_id);
+    state
+        .db
+        .delete_download_task(&task_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn open_download_file(app: AppHandle, file_path: String) -> Result<(), String> {
     let path = PathBuf::from(file_path);
     if !path.is_file() {

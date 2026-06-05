@@ -8,7 +8,7 @@ use reqwest::header::{HeaderMap, HeaderValue, COOKIE, REFERER, SET_COOKIE, USER_
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub const BILI_REFERER: &str = "https://www.bilibili.com/";
@@ -618,13 +618,19 @@ async fn fetch_play_formats(
                     format!("{} ({})", quality_label(quality_id), codec_label(codec))
                 };
 
+                let mut headers = HashMap::new();
+                if !cookie.is_empty() {
+                    headers.insert("Cookie".to_string(), cookie.to_string());
+                    headers.insert("Referer".to_string(), BILI_REFERER.to_string());
+                    headers.insert("User-Agent".to_string(), BILI_UA.to_string());
+                }
                 formats.push(VideoFormat {
                     quality,
                     url: base_url.to_string(),
                     preview_url: preview_url.clone(),
                     audio_url: audio_url.clone(),
                     size: best_video.get("size").and_then(|v| v.as_u64()),
-                    headers: Default::default(),
+                    headers,
                 });
             }
         }
@@ -634,13 +640,19 @@ async fn fetch_play_formats(
         if let Some(durls) = play_data.get("durl").and_then(|v| v.as_array()) {
             for durl in durls {
                 if let Some(url) = durl.get("url").and_then(|v| v.as_str()) {
+                    let mut headers = HashMap::new();
+                    if !cookie.is_empty() {
+                        headers.insert("Cookie".to_string(), cookie.to_string());
+                        headers.insert("Referer".to_string(), BILI_REFERER.to_string());
+                        headers.insert("User-Agent".to_string(), BILI_UA.to_string());
+                    }
                     formats.push(VideoFormat {
                         quality: "default".to_string(),
                         url: url.to_string(),
                         preview_url: Some(url.to_string()),
                         audio_url: None,
                         size: durl.get("size").and_then(|v| v.as_u64()),
-                        headers: Default::default(),
+                        headers,
                     });
                 }
             }
