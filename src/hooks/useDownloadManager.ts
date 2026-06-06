@@ -90,13 +90,13 @@ export function useDownloadManager(settingsData: Settings | undefined) {
   );
 
   const activeDownloadCount = downloadHistoryTasks.filter((task) =>
-    ["queued", "downloading"].includes(task.status),
+    ["queued", "downloading", "remuxing"].includes(task.status),
   ).length;
 
   const activeBatchCount = downloadHistoryTasks.filter(
     (task) =>
       task.type === "batch" &&
-      ["queued", "downloading"].includes(task.status),
+      ["queued", "downloading", "remuxing"].includes(task.status),
   ).length;
 
   const hasDownloadTasks = downloadHistoryTasks.length > 0;

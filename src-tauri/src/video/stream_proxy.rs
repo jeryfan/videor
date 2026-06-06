@@ -85,11 +85,7 @@ async fn fetch_stream(url: &str, range: Option<&str>) -> Result<Response<Vec<u8>
         ));
     }
 
-    let client = reqwest::Client::builder()
-        .user_agent(BILI_UA)
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::proxy::http_client::get_client();
     let mut req = client
         .get(url)
         .header(USER_AGENT, BILI_UA)
@@ -234,19 +230,16 @@ async fn fetch_hls_resource(
         return Ok(text_response(StatusCode::FORBIDDEN, "unsupported hls url"));
     }
 
-    let entry = hls_contexts()
-        .await
-        .read()
-        .await
-        .get(token)
-        .cloned()
-        .ok_or_else(|| "hls context expired".to_string())?;
-    let headers = entry.headers;
+    let headers = {
+        let mut contexts = hls_contexts().await.write().await;
+        let entry = contexts
+            .get_mut(token)
+            .ok_or_else(|| "hls context expired".to_string())?;
+        entry.created_at = Instant::now();
+        entry.headers.clone()
+    };
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::proxy::http_client::get_client();
     let mut req = client.get(url);
     for (name, value) in headers {
         req = req.header(name, value);
@@ -417,7 +410,12 @@ fn is_allowed_video_url(url: &str) -> bool {
     url.starts_with("https://")
         && (url.contains(".bilivideo.com")
             || url.contains("bilivideo.cn")
-            || url.contains("bilibili.com"))
+            || url.contains("bilibili.com")
+            || url.contains("douyinvod.com")
+            || url.contains("douyin.com")
+            || url.contains(".m3u8")
+            || url.contains(".mp4")
+            || url.contains(".ts"))
 }
 
 fn bounded_range(range: Option<&str>) -> String {
@@ -442,6 +440,10 @@ fn bounded_range(range: Option<&str>) -> String {
         .map(|value| value.min(max_end))
         .unwrap_or(max_end);
 
+    if end < start {
+        return format!("bytes={start}-{start}");
+    }
+
     format!("bytes={start}-{end}")
 }
 
@@ -450,7 +452,7 @@ fn text_response(status: StatusCode, text: &str) -> Response<Vec<u8>> {
         .status(status)
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .body(text.as_bytes().to_vec())
-        .unwrap()
+        .unwrap_or_else(|_| Response::new(text.as_bytes().to_vec()))
 }
 
 fn percent_decode(input: &str) -> String {

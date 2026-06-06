@@ -343,30 +343,29 @@ export function useDownloadActions(
         .map((item) => item.taskId as string);
 
       setDownloadHistoryTasks((tasks) => {
+        const idx = tasks.findIndex(
+          (t) => t.id === task.id && t.type === "batch",
+        );
+        if (idx === -1) return tasks;
         const now = Date.now();
-        return tasks.map((historyTask) => {
-          if (
-            historyTask.id !== task.id ||
-            historyTask.type !== "batch"
-          ) {
-            return historyTask;
-          }
-          const items = (historyTask.items || []).map((item) =>
-            ["queued", "downloading", "remuxing"].includes(item.status)
-              ? {
-                  ...item,
-                  status: "cancelled" as BatchDownloadStatus,
-                  error: undefined,
-                }
-              : item,
-          );
-          return {
-            ...historyTask,
-            ...calculateBatchTaskState(items),
-            items,
-            updatedAt: now,
-          };
-        });
+        const historyTask = tasks[idx];
+        const items = (historyTask.items || []).map((item) =>
+          ["queued", "downloading", "remuxing"].includes(item.status)
+            ? {
+                ...item,
+                status: "cancelled" as BatchDownloadStatus,
+                error: undefined,
+              }
+            : item,
+        );
+        const newTasks = tasks.slice();
+        newTasks[idx] = {
+          ...historyTask,
+          ...calculateBatchTaskState(items),
+          items,
+          updatedAt: now,
+        };
+        return newTasks;
       });
 
       await Promise.allSettled(runningTaskIds.map(cancelVideoDownload));
@@ -459,29 +458,33 @@ export function useDownloadActions(
         sanitizePathSegment(collectionTitle),
       );
 
-      setDownloadHistoryTasks((tasks) =>
-        tasks.map((t) => {
-          if (t.id !== task.id || t.type !== "batch") return t;
-          const items = (t.items || []).map((item) =>
-            item.status === "failed"
-              ? {
-                  ...item,
-                  status: "queued" as BatchDownloadStatus,
-                  progress: 0,
-                  speed: 0,
-                  error: undefined,
-                  filePath: undefined,
-                }
-              : item,
-          );
-          return {
-            ...t,
-            ...calculateBatchTaskState(items),
-            items,
-            updatedAt: Date.now(),
-          };
-        }),
-      );
+      setDownloadHistoryTasks((tasks) => {
+        const idx = tasks.findIndex(
+          (t) => t.id === task.id && t.type === "batch",
+        );
+        if (idx === -1) return tasks;
+        const t = tasks[idx];
+        const items = (t.items || []).map((item) =>
+          item.status === "failed"
+            ? {
+                ...item,
+                status: "queued" as BatchDownloadStatus,
+                progress: 0,
+                speed: 0,
+                error: undefined,
+                filePath: undefined,
+              }
+            : item,
+        );
+        const newTasks = tasks.slice();
+        newTasks[idx] = {
+          ...t,
+          ...calculateBatchTaskState(items),
+          items,
+          updatedAt: Date.now(),
+        };
+        return newTasks;
+      });
 
       for (const [idx, item] of failedItems.entries()) {
         if (idx > 0) {
@@ -609,18 +612,20 @@ export function useDownloadActions(
         console.error("[Download] Failed to cancel:", error);
       }
       // 无论后端是否成功，前端都同步清理状态，防止后端任务丢失导致 UI 卡死
-      setDownloadHistoryTasks((tasks) =>
-        tasks.map((task) =>
-          task.id === taskId && task.type === "single"
-            ? {
-                ...task,
-                status: "cancelled" as BatchDownloadStatus,
-                error: undefined,
-                updatedAt: Date.now(),
-              }
-            : task,
-        ),
-      );
+      setDownloadHistoryTasks((tasks) => {
+        const idx = tasks.findIndex(
+          (task) => task.id === taskId && task.type === "single",
+        );
+        if (idx === -1) return tasks;
+        const newTasks = tasks.slice();
+        newTasks[idx] = {
+          ...newTasks[idx],
+          status: "cancelled" as BatchDownloadStatus,
+          error: undefined,
+          updatedAt: Date.now(),
+        };
+        return newTasks;
+      });
       const keys = downloadTaskResourceKeysRef.current.get(taskId);
       keys?.forEach((key) => activeDownloadResourceKeysRef.current.delete(key));
       downloadTaskResourceKeysRef.current.delete(taskId);

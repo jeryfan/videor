@@ -71,6 +71,13 @@ impl Database {
         )
         .map_err(|e| AppError::Database(format!("创建索引失败: {e}")))?;
 
+        // 按创建时间排序查询优化
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_download_tasks_created_at ON download_tasks(created_at DESC)",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 created_at 索引失败: {e}")))?;
+
         Ok(())
     }
 

@@ -48,6 +48,8 @@ where
     serializer.serialize_str("failed")
 }
 
+const CANCELLED_MSG: &str = "下载已取消";
+
 #[derive(Clone)]
 struct TaskSpec {
     app: AppHandle,
@@ -193,7 +195,7 @@ impl DownloadManager {
 
             let status = match result {
                 Ok(()) => DownloadStatus::Completed,
-                Err(e) if e == "下载已取消" => DownloadStatus::Cancelled,
+                Err(e) if e == CANCELLED_MSG => DownloadStatus::Cancelled,
                 Err(e) => DownloadStatus::Failed(e),
             };
 
@@ -317,22 +319,29 @@ async fn run_task(
             .status()
             .await;
 
-        let _ = tokio::fs::remove_file(&video_tmp).await;
-        let _ = tokio::fs::remove_file(&audio_tmp).await;
-
         match mux_result {
-            Ok(status) if status.success() => {}
+            Ok(status) if status.success() => {
+                let _ = tokio::fs::remove_file(&video_tmp).await;
+                let _ = tokio::fs::remove_file(&audio_tmp).await;
+            }
             _ => {
-                // ffmpeg 不可用或失败：只保留视频流
-                download_stream(
-                    app,
-                    task_id,
-                    format,
-                    &format.url,
-                    save_path,
-                    cancel_token,
-                )
-                .await?;
+                // ffmpeg 不可用或失败：保留已下载的视频流
+                let _ = tokio::fs::remove_file(&audio_tmp).await;
+                if tokio::fs::try_exists(&video_tmp).await.unwrap_or(false) {
+                    tokio::fs::rename(&video_tmp, save_path)
+                        .await
+                        .map_err(|e| format!("重命名视频流文件失败: {e}"))?;
+                } else {
+                    download_stream(
+                        app,
+                        task_id,
+                        format,
+                        &format.url,
+                        save_path,
+                        cancel_token,
+                    )
+                    .await?;
+                }
             }
         }
     } else {
@@ -953,12 +962,16 @@ async fn download_stream(
             false
         } else if resp.status() == reqwest::StatusCode::OK {
             // 服务器忽略 Range，发送完整内容
-            let _ = tokio::fs::remove_file(&part_path).await;
+            tokio::fs::remove_file(&part_path)
+                .await
+                .map_err(|e| format!("删除断点续传临时文件失败: {e}"))?;
             start_byte = 0;
             false
         } else if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
             // Range 不可满足（通常是 .part 文件已完整），删除后重试
-            let _ = tokio::fs::remove_file(&part_path).await;
+            tokio::fs::remove_file(&part_path)
+                .await
+                .map_err(|e| format!("删除断点续传临时文件失败: {e}"))?;
             start_byte = 0;
             true
         } else if !resp.status().is_success() {
@@ -1037,20 +1050,7 @@ async fn download_stream(
         tokio::select! {
             _ = cancel_token.cancelled() => {
                 drop(file);
-                let _ = app.emit(
-                    "video-download-progress",
-                    DownloadProgress {
-                        task_id: task_id.to_string(),
-                        downloaded,
-                        total,
-                        speed: 0,
-                        status: DownloadStatus::Cancelled,
-                        file_path: None,
-                        is_batch: None,
-                        error: None,
-                    },
-                );
-                return Err("下载已取消".to_string());
+                return Err(CANCELLED_MSG.to_string());
             }
             chunk = tokio::time::timeout(Duration::from_secs(120), stream.next()) => {
                 match chunk {

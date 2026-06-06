@@ -1,14 +1,17 @@
 use super::{header_map_to_hash_map, VideoFormat, VideoInfo, VideoItem, VideoKind, VideoParser};
 use reqwest::header::HeaderMap;
+use once_cell::sync::Lazy;
+
+static VIDEO_EXT_REGEX: Lazy<regex::Regex> = Lazy::new(|| {
+    regex::Regex::new(r"\.(mp4|webm|ogg|mov|m4v|mkv|flv|ts)(\?.*)?(#.*)?$").expect("valid regex")
+});
 
 pub struct DirectParser;
 
 #[async_trait::async_trait]
 impl VideoParser for DirectParser {
     fn can_handle(&self, url: &str) -> bool {
-        let video_ext_regex =
-            regex::Regex::new(r"\.(mp4|webm|ogg|mov|m4v|mkv|flv|ts)(\?.*)?(#.*)?$").unwrap();
-        video_ext_regex.is_match(url)
+        VIDEO_EXT_REGEX.is_match(url)
     }
 
     async fn parse(&self, url: &str, _client: &reqwest::Client) -> Result<VideoInfo, String> {

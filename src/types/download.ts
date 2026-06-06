@@ -147,48 +147,57 @@ export function updateBatchItem(
   itemId: string,
   patch: Partial<BatchDownloadItem>,
 ): DownloadHistoryTask[] {
-  const now = Date.now();
-  return tasks.map((task) => {
-    if (task.id !== taskId || task.type !== "batch" || !task.items) {
-      return task;
-    }
-    const items = task.items.map((item) =>
-      item.id === itemId ? { ...item, ...patch } : item,
-    );
-    return {
-      ...task,
-      ...calculateBatchTaskState(items),
-      items,
-      updatedAt: now,
-    };
-  });
+  const taskIdx = tasks.findIndex(
+    (t) => t.id === taskId && t.type === "batch" && !!t.items,
+  );
+  if (taskIdx === -1) return tasks;
+
+  const task = tasks[taskIdx];
+  const itemIdx = task.items!.findIndex((i) => i.id === itemId);
+  if (itemIdx === -1) return tasks;
+
+  const newItems = task.items!.slice();
+  newItems[itemIdx] = { ...newItems[itemIdx], ...patch };
+  const newTasks = tasks.slice();
+  newTasks[taskIdx] = {
+    ...task,
+    ...calculateBatchTaskState(newItems),
+    items: newItems,
+    updatedAt: Date.now(),
+  };
+  return newTasks;
 }
 
 export function cancelQueuedBatchItems(
   tasks: DownloadHistoryTask[],
   taskId: string,
 ): DownloadHistoryTask[] {
-  const now = Date.now();
-  return tasks.map((task) => {
-    if (task.id !== taskId || task.type !== "batch" || !task.items) {
-      return task;
-    }
-    const items = task.items.map((item) =>
-      ["queued"].includes(item.status)
-        ? {
-            ...item,
-            status: "cancelled" as BatchDownloadStatus,
-            error: undefined,
-          }
-        : item,
-    );
+  const taskIdx = tasks.findIndex(
+    (t) => t.id === taskId && t.type === "batch" && !!t.items,
+  );
+  if (taskIdx === -1) return tasks;
+
+  const task = tasks[taskIdx];
+  let changed = false;
+  const newItems = task.items!.map((item) => {
+    if (!["queued"].includes(item.status)) return item;
+    changed = true;
     return {
-      ...task,
-      ...calculateBatchTaskState(items),
-      items,
-      updatedAt: now,
+      ...item,
+      status: "cancelled" as BatchDownloadStatus,
+      error: undefined,
     };
   });
+  if (!changed) return tasks;
+
+  const newTasks = tasks.slice();
+  newTasks[taskIdx] = {
+    ...task,
+    ...calculateBatchTaskState(newItems),
+    items: newItems,
+    updatedAt: Date.now(),
+  };
+  return newTasks;
 }
 
 export function restoreSingleDownloadTask(
